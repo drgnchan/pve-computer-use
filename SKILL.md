@@ -29,8 +29,9 @@ description: Control and inspect a virtual machine on Proxmox VE through its VNC
 pve-cu --target windows-vm status
 ```
 
-返回 `connected`、`width`/`height`、`framebufferUpdates`、`authMethod`、`vmName`、`notes`、`pageErrors`。
+返回 `connected`、`width`/`height`、`framebufferUpdates`、`authMethod`、`vmName`、`tlsMode`、`notes`、`pageErrors`。
 `connected: false` 或存在 `failure` 时先排错，不要盲目发送输入。
+排错顺序：`tlscheck`（网络/证书）→ `status`（认证/权限/VM 状态）→ `reconnect`（票据过期）。
 
 ### 2. Capture Screen Frame
 
@@ -127,5 +128,8 @@ PVE 的 vnc ticket 是短期的，控制台空闲也可能断开。出现 `Conso
 仍失败再检查 `status.authMethod`、权限（需要 `VM.Console`）与 VM 是否 running。
 
 ### G. TLS 指纹必须固定
-PVE 使用自签证书。首次使用前运行 `pve-cu --target <t> fingerprint` 并把摘要写入配置，
-否则 Daemon 会拒绝连接（除非显式设置 `insecureTls`，不建议）。
+PVE 用自己的集群 CA 签发证书，且握手时不下发该 CA，系统信任库会直接拒绝。
+首次使用前运行 `pve-cu --target <t> fingerprint`，把摘要写进配置的 `tlsFingerprint`，
+再用 `pve-cu --target <t> tlscheck` 验证（不发送任何凭据）。
+指纹不符时 Daemon 会在写入任何请求字节前断开，因此凭据不会泄露给冒充者；
+不要用 `insecureTls` 绕过。

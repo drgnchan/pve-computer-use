@@ -1,7 +1,7 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createPinnedAgent, isFingerprint } from './tls-pinning.js';
 
 export function configPath() {
   return process.env.PVE_CU_CONFIG || path.join(os.homedir(), '.config/pve-cu/config.json');
@@ -37,6 +37,8 @@ export function loadConfig(target, file = configPath()) {
   if (!/^[a-zA-Z0-9._-]+$/.test(entry.node || '')) throw new Error('target.node must be a PVE node name');
   if (!Number.isSafeInteger(entry.vmid) || entry.vmid < 100) throw new Error('target.vmid must be a numeric VMID >= 100');
 
+  if (entry.tlsFingerprint && !isFingerprint(entry.tlsFingerprint)) throw new Error('tlsFingerprint must be a SHA-256 hex digest (64 hex characters)');
+
   const runtimeDir = path.join(entry.cacheDir || path.join(os.homedir(), '.cache/pve-cu'), target);
   const framesDir = path.join(runtimeDir, 'frames');
   fs.mkdirSync(framesDir, { recursive: true, mode: 0o700 });
@@ -44,26 +46,20 @@ export function loadConfig(target, file = configPath()) {
 
   const tlsOptions = {};
   if (entry.caFile) tlsOptions.ca = fs.readFileSync(entry.caFile);
-  else if (entry.tlsFingerprint) tlsOptions.checkServerIdentity = fingerprintChecker(entry.tlsFingerprint);
-  else if (entry.insecureTls === true) tlsOptions.rejectUnauthorized = false;
+  else if (entry.tlsFingerprint) {
+    // PVE ships a private cluster CA and does not send it during the handshake,
+    // so pin the leaf digest (verified before any request byte is written).
+    tlsOptions.agent = createPinnedAgent({ fingerprint: entry.tlsFingerprint, host: endpoint.hostname });
+  } else if (entry.insecureTls === true) tlsOptions.rejectUnauthorized = false;
 
   return {
     target, configPath: file, endpoint: endpoint.origin, node: entry.node, vmid: entry.vmid,
     auth: entry.auth || {}, runtimeDir, framesDir, socketPath: entry.socketPath || path.join(runtimeDir, 'daemon.sock'),
-    tlsOptions, insecureTls: entry.insecureTls === true && !entry.caFile && !entry.tlsFingerprint,
+    tlsOptions, tlsMode: entry.caFile ? 'ca-file' : entry.tlsFingerprint ? 'pinned-fingerprint' : entry.insecureTls ? 'insecure' : 'system-trust',
+    insecureTls: entry.insecureTls === true && !entry.caFile && !entry.tlsFingerprint,
     imageFormat: entry.imageFormat === 'jpeg' ? 'jpeg' : 'png', jpegQuality: entry.jpegQuality ?? 0.9, frameKeep: entry.frameKeep ?? 20,
     executablePath: entry.executablePath || root.executablePath || process.env.PVE_CU_CHROME || '/usr/bin/google-chrome',
     connectTimeoutMs: entry.connectTimeoutMs ?? 25000, maxViewport: entry.maxViewport ?? 3840,
-  };
-}
-
-function fingerprintChecker(expected) {
-  const want = String(expected).replace(/[:\s]/g, '').toLowerCase();
-  if (!/^[0-9a-f]{64}$/.test(want)) throw new Error('tlsFingerprint must be a SHA-256 hex digest');
-  return (_hostname, certificate) => {
-    const digest = crypto.createHash('sha256').update(certificate.raw).digest('hex');
-    if (digest !== want) throw new Error(`PVE certificate fingerprint mismatch (got ${digest}); refusing to send credentials`);
-    return undefined;
   };
 }
 

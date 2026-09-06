@@ -1,4 +1,5 @@
 import https from 'node:https';
+import net from 'node:net';
 import tls from 'node:tls';
 
 const TIMEOUT_MS = 20_000;
@@ -93,18 +94,33 @@ export class PveApi {
     return { upstreamUrl: url.href, password: proxy.password, headers: this.headers, tlsOptions: this.tlsOptions(), vmName: status.name || null };
   }
 
-  /** Prints the served certificate digest so it can be pinned in config. */
+  /** Reads the served certificate so its digest can be pinned (no verification, no auth). */
   peerFingerprint() {
     const url = new URL(this.config.endpoint);
+    const host = url.hostname;
+    const isIp = net.isIP(host) !== 0;
     return new Promise((resolve, reject) => {
-      const socket = tls.connect(Number(url.port || 443), url.hostname, { ...this.tlsOptions(), servername: url.hostname, timeout: TIMEOUT_MS }, () => {
+      const socket = tls.connect(Number(url.port || 443), host, {
+        // Deliberately permissive: the whole point is to read an unpinned certificate.
+        rejectUnauthorized: false,
+        ...(isIp ? {} : { servername: host }),
+        timeout: TIMEOUT_MS,
+      }, () => {
         const certificate = socket.getPeerCertificate(true);
-        const digest = socket.getPeerX509Certificate?.()?.fingerprint256 || certificate.fingerprint256;
+        const digest = (socket.getPeerX509Certificate?.() || certificate)?.fingerprint256 || certificate.fingerprint256;
+        const subject = certificate.subject || {};
         socket.end();
-        resolve({ fingerprint: String(digest || '').replace(/:/g, '').toLowerCase(), subject: certificate.subject, issuer: certificate.issuer, validTo: certificate.valid_to });
+        resolve({
+          fingerprint: String(digest || '').replace(/:/g, '').toLowerCase(),
+          subject: { CN: subject.CN, O: subject.O },
+          issuer: certificate.issuer?.CN || null,
+          sans: certificate.subjectaltname || null,
+          validTo: certificate.valid_to,
+          selfSigned: (certificate.issuerCertificate?.fingerprint256 ?? null) === (digest ?? null),
+        });
       });
       socket.on('timeout', () => socket.destroy(new Error('TLS handshake timed out')));
-      socket.on('error', error => reject(new Error(describeTlsError(error, this.config))));
+      socket.on('error', error => reject(new Error(`Cannot reach ${this.config.endpoint} (${error.code || error.message})`)));
     });
   }
 }

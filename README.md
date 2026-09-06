@@ -86,8 +86,8 @@ npm run debug:rfb      # 单次连接 fake VNC server，打印握手/输入事�
 | `node` / `vmid` | 目标节点与虚拟机 ID |
 | `auth.tokenId` + `tokenSecretEnv` | **推荐**：API Token，密钥只放在环境变量里 |
 | `auth.username` + `passwordEnv` | 用户密码（不支持 MFA 登录） |
-| `tlsFingerprint` | PVE 自签证书 SHA-256，用 `fingerprint` 命令获取 |
-| `caFile` | 或指定 CA/证书 PEM（与 `tlsFingerprint` 二选一） |
+| `tlsFingerprint` | PVE 证书 SHA-256，用 `fingerprint` 命令获取（推荐，见下） |
+| `caFile` | 或指定 CA PEM（如 `/etc/pve/pve-root-ca.pem`），走完整链校验 |
 | `insecureTls` | 显式关闭校验，Daemon 启动时打印警告 |
 | `imageFormat` / `jpegQuality` | `png`（默认，文字清晰）或 `jpeg` |
 | `cacheDir` / `socketPath` / `frameKeep` | 运行目录、Socket 路径、保留截图数 |
@@ -106,12 +106,29 @@ pveum user token add pve-cu@pve console --privsep 0
 export PVE_CU_TOKEN_WINDOWS_VM='<token secret>'
 ```
 
-TLS 指纹固定：
+### TLS 信任
+
+PVE 用自己的集群 CA（`pve-root-ca`）签发证书，且**握手时不下发该 CA**，所以系统信任库会直接拒绝。
+两种受支持的方式：
 
 ```bash
+# 方式一（推荐，无需登录 PVE）：固定 leaf 证书指纹
 pve-cu --target windows-vm fingerprint
-# 把返回的 fingerprint 填进 config.json 的 tlsFingerprint
+# 把输出的 fingerprint 填进 config.json 的 tlsFingerprint
+pve-cu --target windows-vm tlscheck      # 不发送任何凭据，验证可达性 + 证书固定
+
+# 方式二：拿到 PVE 根 CA 后走完整链校验
+scp root@192.0.2.10:/etc/pve/pve-root-ca.pem ~/.config/pve-cu/pve-ca.pem
+# config.json 里改为 "caFile": "/home/user/.config/pve-cu/pve-ca.pem"
 ```
+
+指纹固定由自定义 `https.Agent` 实现：握手后校验 leaf 摘要**与请求地址（SAN）**，
+通过前所有写入被拦截，不通过就销毁 socket。
+> Node 在 `rejectUnauthorized:false` 时**不会**调用 `checkServerIdentity`，
+> 所以“关掉校验 + 自定义 checkServerIdentity”的写法是假固定；不要用。
+
+两个安全断言已写入测试：指纹不符时 **HTTPS 请求不会到达对端**，
+**bridge 的 `wss://` 上游也不会建连**（即 `vncticket`、Cookie 和 RFB 密码不可能泄露给冒充者）。
 
 ---
 
@@ -133,6 +150,8 @@ pve-cu --target windows-vm reset                     # 释放所有卡住的按�
 pve-cu --target windows-vm reconnect                 # 重新申请票据并重连
 pve-cu --target windows-vm daemon stop
 pve-cu targets
+pve-cu --target windows-vm fingerprint   # 证书指纹（用于固定）
+pve-cu --target windows-vm tlscheck      # 可达性 + 证书固定校验，不发送凭据
 ```
 
 坐标：`0.0~1.0` 归一化、当前 framebuffer 像素，或 `--x 500 --y 500 --space 1000` 自定义坐标空间。
@@ -180,17 +199,26 @@ pve-cu targets
 
 ## 当前状态
 
-**已离线验证**（`npm test`，14 个用例全绿）：
+**已对真实 PVE 验证**（`192.0.2.10:8006`，仅 TLS + 无认证端点，未发送凭据、未触碰任何 VM）：
+
+- `fingerprint`：拿到 leaf 摘要 `<sha256-fingerprint>`，CN `pve-node.lan`，
+  签发者 `Proxmox Virtual Environment`，SAN 包含 `IP Address:192.0.2.10`，有效期至 2028-06
+- 握手**只下发 leaf**（链长 1），因此无法从握手引导出 CA
+- `tlscheck`：指纹固定生效，`/access/domains` 返回 `pam`/`pve`，往返 41ms
+
+**已离线验证**（`npm test`，17 个用例全绿）：
 
 - 配置校验、坐标换算（归一化/像素/自定义 space）、按键与组合键 keysym+DOM code 规划
 - loopback bridge：页面托管、token 校验、`binary` 子协议、Cookie/Authorization 头透传、双向字节转发
 - Daemon：动作串行派发、截图落盘（0600）与按数量裁剪、非法输入在触达控制台前被拒绝
+- TLS 固定：正确指纹放行、错误指纹拒绝且**请求不会发出**、地址（SAN）不符拒绝、`caFile` 完整链校验、
+  bridge 的 `wss://` 上游同样受固定保护
 - **RFB 端到端**（自建 fake VNC server 承载于 WebSocket，模拟 PVE 的 vncwebsocket）：
   3.008 握手、VNC 认证（type 2，确认密码真的参与了 challenge 响应）、ServerInit/分辨率、
   Raw framebuffer → PNG 截图、PointerEvent 绝对坐标与左右键/滚轮位、
   QEMU Extended Key Event（scancode 0x1d/0x26/0xc8 等）与普通 KeyEvent 回退路径、认证失败可见
 
-**尚未对真实 PVE 联调**（需要 API Token 与运行中的 VM）。首次联调建议顺序：
+**尚缺的一步：真实控制台联调**（需要 API Token 与运行中的 VM）。首次联调建议顺序：
 
 ```bash
 pve-cu --target windows-vm fingerprint   # 固定证书

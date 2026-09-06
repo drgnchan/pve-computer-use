@@ -103,6 +103,7 @@ Commands:
   reset                                    release every held key and mouse button
   reconnect                                drop and reopen the console session
   fingerprint                              print the PVE TLS certificate SHA-256 to pin
+  tlscheck                                 verify endpoint + certificate pinning (no credentials sent)
   daemon start|stop|log
   targets                                  list configured targets
   help
@@ -129,6 +130,21 @@ async function main() {
   if (!target) fail('Missing --target <name> (or PVE_CU_TARGET); run `pve-cu targets`');
   let config;
   try { config = loadConfig(target); } catch (error) { return fail(error.message); }
+
+  if (command === 'tlscheck') {
+    // Setup helper: proves reachability + certificate pinning using an endpoint
+    // that PVE serves without authentication. Never sends credentials.
+    try {
+      const api = new PveApi(config);
+      const started = Date.now();
+      const domains = await api.request('GET', '/access/domains');
+      console.log(JSON.stringify({
+        ok: true, target, endpoint: config.endpoint, tlsMode: config.tlsMode,
+        realms: (domains || []).map(realm => realm.realm).sort(), roundTripMs: Date.now() - started,
+      }, null, 2));
+    } catch (error) { fail(error.message); }
+    return;
+  }
 
   if (command === 'fingerprint') {
     try {

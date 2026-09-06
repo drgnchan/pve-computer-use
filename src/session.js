@@ -128,6 +128,7 @@ export class ConsoleSession {
       lastUpdateAt: report.lastUpdateAt || null, width: report.width, height: report.height,
       desktopName: report.desktopName || null, heldKeys: report.heldKeys ?? 0, mouseMask: report.mouseMask ?? 0,
       bridge: this.bridge ? this.bridge.origin : null, sandboxDisabled: this.sandboxDisabled,
+      tlsMode: this.config.tlsMode || (this.config.insecureTls ? 'insecure' : 'system-trust'),
       insecureTls: this.config.insecureTls, imageFormat: this.config.imageFormat, notes: this.notes, pageErrors: this.pageErrors.slice(-5),
     };
   }
