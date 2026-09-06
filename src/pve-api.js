@@ -139,9 +139,23 @@ export function splitVncTicket(ticket, explicitPassword) {
   }
   const match = /^([\x21-\x60]{8}):(PVEVNC:.*)$/.exec(String(ticket || ''));
   if (match) return { password: match[1], vncticket: ticket };
+  // PVE 7 (and older): no password field and no prefix; the VNC protocol
+  // password is the ticket itself. DES only uses the first 8 bytes on both
+  // sides, so passing the whole ticket matches the server's truncation.
+  if (/^PVEVNC:/.test(String(ticket || ''))) return { password: String(ticket), vncticket: ticket };
   throw new Error(
-    'PVE returned no RFB console password: neither a password field nor the "<8 chars>:PVEVNC:" ticket prefix; check the PVE version'
+    `PVE returned an unrecognisable vncproxy ticket; cannot derive the RFB password. `
+    + describeTicketShape(ticket)
   );
+}
+
+/** Non-secret diagnostics: length, where "PVEVNC:" starts, prefix char range. */
+export function describeTicketShape(ticket) {
+  const value = String(ticket || '');
+  const index = value.indexOf('PVEVNC:');
+  const prefix = index > 0 ? value.slice(0, index - 1) : '';
+  const inRange = prefix.length === 8 && /^[\x21-\x60]{8}$/.test(prefix);
+  return `length=${value.length}, pvevncAtIndex=${index}, prefixLength=${prefix.length}, prefixInPveRange=${inRange}`;
 }
 
 function describeTlsError(error, config) {

@@ -22,8 +22,9 @@ function formBody(raw) {
  *   - vncwebsocket requires API auth *and* a matching vncticket/port
  */
 export class FakePve {
-  constructor({ cert, key, node = 'lab', vmid = 105, vmName = 'fake-vm', running = true, width = 160, height = 100, advertiseQemuExtKey = true, pattern = null, color, rejectAuth = false, omitVncPasswordField = false }) {
+  constructor({ cert, key, node = 'lab', vmid = 105, vmName = 'fake-vm', running = true, width = 160, height = 100, advertiseQemuExtKey = true, pattern = null, color, rejectAuth = false, omitVncPasswordField = false, pve7StyleTicket = false }) {
     this.omitVncPasswordField = omitVncPasswordField;
+    this.pve7StyleTicket = pve7StyleTicket;
     this.node = node;
     this.vmid = vmid;
     this.vmName = vmName;
@@ -117,7 +118,10 @@ export class FakePve {
       if (body.websocket !== '1') return this.json(res, 400, null);
       // PVE::Ticket::generate_vnc_password uses 8 bytes in '!' (33) .. '`' (96).
       this.vncPassword = Array.from(crypto.randomBytes(8), byte => String.fromCharCode(33 + (byte % 64))).join('');
-      this.vncTicket = `${this.vncPassword}:PVEVNC:${FAKE_USERNAME}:/vms/${this.vmid}:${crypto.randomBytes(8).toString('hex').toUpperCase()}`;
+      const bare = `PVEVNC:${FAKE_USERNAME}:/vms/${this.vmid}:${crypto.randomBytes(8).toString('hex').toUpperCase()}`;
+      // PVE 7 style: no prefix and no password field; the ticket IS the VNC password.
+      this.vncTicket = this.pve7StyleTicket ? bare : `${this.vncPassword}:${bare}`;
+      if (this.pve7StyleTicket) this.vncPassword = bare;
       const result = {
         user: FAKE_USERNAME, ticket: this.vncTicket,
         cert: '', port: this.vncPort, upid: `UPID:${this.node}:0000:00000000:00000000:vncproxy:${this.vmid}:${FAKE_USERNAME}:`,

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { splitVncTicket } from '../src/pve-api.js';
+import { splitVncTicket, describeTicketShape } from '../src/pve-api.js';
 
 test('prefers the explicit password field', () => {
   assert.deepEqual(
@@ -18,9 +18,23 @@ test('falls back to the ticket prefix on older PVE versions', () => {
   assert.deepEqual(splitVncTicket(tricky, null), { password: ':::A:B:C', vncticket: tricky });
 });
 
+test('PVE 7 style bare tickets use the ticket itself as the VNC password', () => {
+  const ticket = 'PVEVNC:pve-cu@pve:/vms/105:5900:DEADBEEF';
+  assert.deepEqual(splitVncTicket(ticket, undefined), { password: ticket, vncticket: ticket });
+});
+
+test('unrecognisable tickets produce non-secret diagnostics', () => {
+  const shape = describeTicketShape('xyz:PVEVNC:a');
+  assert.match(shape, /length=12/);
+  assert.match(shape, /pvevncAtIndex=4/);
+  assert.match(shape, /prefixLength=3/);
+  assert.match(shape, /prefixInPveRange=false/);
+  assert.throws(() => splitVncTicket('xyz:PVEVNC:a', undefined), /length=12, pvevncAtIndex=4/);
+  assert.equal(describeTicketShape('PVEVNC:a').includes('pvevncAtIndex=0'), true);
+});
+
 test('rejects responses with neither form', () => {
-  assert.throws(() => splitVncTicket('PVEVNC:pve-cu@pve:/vms/105:1', undefined), /no RFB console password/);
-  assert.throws(() => splitVncTicket('short:PVEVNC:x', undefined), /no RFB console password/);
-  assert.throws(() => splitVncTicket('', undefined), /no RFB console password/);
-  assert.throws(() => splitVncTicket('aaaaaaaa:PVETUNNEL:x', undefined), /no RFB console password/);
+  assert.throws(() => splitVncTicket('short:PVEVNC:x', undefined), /no RFB console password|unrecognisable/);
+  assert.throws(() => splitVncTicket('', undefined), /unrecognisable/);
+  assert.throws(() => splitVncTicket('aaaaaaaa:PVETUNNEL:x', undefined), /unrecognisable/);
 });
