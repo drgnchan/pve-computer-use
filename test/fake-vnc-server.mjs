@@ -88,6 +88,8 @@ export class FakeVncServer {
   }
 
   async run(socket, read, write) {
+    this.socket = socket;
+    this.write = write;
     await write(Buffer.from('RFB 003.008\n'));
     this.events.clientVersion = (await read(12)).toString().trim();
     await write(Buffer.from([1, 2]));                       // one security type: VNC auth
@@ -129,6 +131,7 @@ export class FakeVncServer {
         this.clientWantsQemuExtKey = this.events.encodings.includes(QEMU_EXT_KEY_EVENT);
       } else if (type === 3) {                              // FramebufferUpdateRequest
         const request = await read(9);
+        this.pendingRequest = true;
         await this.sendUpdate(write, request[0] === 1);
       } else if (type === 4) {                              // KeyEvent
         const body = await read(7);
@@ -149,9 +152,17 @@ export class FakeVncServer {
     }
   }
 
-  async sendUpdate(write, incremental) {
-    if (this.updateCount >= this.maxUpdates) return;
-    if (incremental && this.updateCount >= 2) return;
+  /** Pushes a framebuffer update on demand, bypassing the update cap. */
+  async pushUpdate(color) {
+    if (!this.write || this.socket?.readyState !== 1) return false;
+    if (color) this.color = color;
+    await this.sendUpdate(this.write, false, true);
+    return true;
+  }
+
+  async sendUpdate(write, incremental, force = false) {
+    if (!force && this.updateCount >= this.maxUpdates) return;
+    if (!force && incremental && this.updateCount >= 2) return;
     this.updateCount++;
 
     const rects = [];

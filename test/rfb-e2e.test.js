@@ -102,7 +102,10 @@ test('console session completes RFB auth, captures the framebuffer and injects i
     assert.equal(held.executed, 'key');
     const status = await session.evaluate('consoleState');
     assert.equal(status.heldKeys, 0, 'a completed combo must not leave keys held');
-    assert.deepEqual(await session.evaluate('releaseAll', {}), { executed: 'reset', releasedKeys: 0 });
+    const released = await session.evaluate('releaseAll', {});
+    assert.equal(released.executed, 'reset');
+    assert.equal(released.releasedKeys, 0);
+    assert.ok(released.framebufferUpdates >= 1, 'actions report the frame counter so the daemon can baseline --wait-change');
   });
 });
 
@@ -119,6 +122,33 @@ test('plain KeyEvent path works when the server does not advertise QEMU extensio
     const before = vnc.events.pointerEvents.length;
     await assert.rejects(() => session.evaluate('mouse', { type: 'click', x: 64, y: 0 }), /outside/);
     assert.equal(vnc.events.pointerEvents.length, before);
+  });
+});
+
+test('waitForChange returns on a server push and times out on a static screen', { skip, timeout: 180_000 }, async t => {
+  await withSession(t, { width: 64, height: 48, maxUpdates: 2 }, async (session, vnc) => {
+    const settled = await session.evaluate('consoleState');
+    assert.ok(settled.framebufferUpdates >= 1);
+
+    // Nothing more is coming: the wait must expire and report no change.
+    const idle = await session.evaluate('waitForChange', { baseline: settled.framebufferUpdates, timeoutMs: 400 });
+    assert.equal(idle.changed, false);
+    assert.equal(idle.baselineUpdates, settled.framebufferUpdates);
+    assert.ok(idle.waitedMs >= 350, `waited ${idle.waitedMs}ms`);
+
+    // A real redraw must wake the wait immediately.
+    const pending = session.evaluate('waitForChange', { baseline: settled.framebufferUpdates, timeoutMs: 10_000 });
+    await new Promise(resolve => setTimeout(resolve, 250));
+    assert.equal(await vnc.pushUpdate({ r: 12, g: 200, b: 90 }), true);
+    const result = await pending;
+    assert.equal(result.changed, true);
+    assert.ok(result.framebufferUpdates > settled.framebufferUpdates);
+    assert.ok(result.waitedMs >= 200 && result.waitedMs < 6_000, `waited ${result.waitedMs}ms`);
+
+    // The new content must be visible in the next screenshot.
+    const frame = await session.capture();
+    assert.equal(frame.width, 64);
+    assert.ok(Buffer.from(frame.image, 'base64').length > 100);
   });
 });
 

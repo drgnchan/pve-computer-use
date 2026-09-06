@@ -13,15 +13,21 @@ class MockSession {
     this.config = config;
     this.framebuffer = { width: 1920, height: 1080 };
     this.calls = [];
+    this.updates = 5;
     this.closed = false;
     this.aliveChecks = 0;
   }
   async start() { return await this.state(); }
   async ensureAlive() { this.aliveChecks++; }
-  async state() { return { connected: true, width: 1920, height: 1080, framebufferUpdates: 7, lastUpdateAt: '2026-01-01T00:00:00.000Z' }; }
-  async evaluate(fn, arg) { this.calls.push({ fn, arg }); return { executed: fn, arg }; }
+  async state() { return { connected: true, width: 1920, height: 1080, framebufferUpdates: this.updates, lastUpdateAt: '2026-01-01T00:00:00.000Z' }; }
+  async evaluate(fn, arg) {
+    this.calls.push({ fn, arg });
+    if (fn === 'consoleState') return { connected: true, width: 1920, height: 1080, framebufferUpdates: this.updates };
+    if (fn === 'waitForChange') return { changed: true, waitedMs: 12, baselineUpdates: arg.baseline, framebufferUpdates: this.updates + 1 };
+    return { executed: fn, arg, framebufferUpdates: this.updates };
+  }
   async capture() {
-    return { format: 'png', width: 1920, height: 1080, image: PNG_1PX, framebufferUpdates: 7, lastUpdateAt: '2026-01-01T00:00:00.000Z' };
+    return { format: 'png', width: 1920, height: 1080, image: PNG_1PX, framebufferUpdates: this.updates, lastUpdateAt: '2026-01-01T00:00:00.000Z' };
   }
   async close() { this.closed = true; }
 }
@@ -157,6 +163,27 @@ test('a ping does not keep an idle session alive', async t => {
     await new Promise(resolve => setTimeout(resolve, 30));
   }
   assert.equal(sessions[0].closed, true, 'pings must not pin the console session');
+});
+
+test('observe --wait-change waits against the frame counter of the last input action', async t => {
+  const { sessions, socketPath } = await startDaemon(t);
+
+  const plain = await send(socketPath, { action: 'observe' });
+  assert.equal(plain.ok, true);
+  assert.equal(sessions[0].calls.some(call => call.fn === 'waitForChange'), false, 'no waiting unless asked');
+  assert.equal(plain.data.changed, undefined);
+
+  await send(socketPath, { action: 'click', params: { x: 0.5, y: 0.5 } });
+  const frame = await send(socketPath, { action: 'observe', params: { 'wait-change': true, 'wait-timeout': 1500 } });
+  assert.equal(frame.ok, true);
+  const wait = sessions[0].calls.find(call => call.fn === 'waitForChange');
+  assert.deepEqual(wait.arg, { baseline: 5, timeoutMs: 1500 }, 'the baseline must come from the click, not from now');
+  assert.equal(frame.data.changed, true);
+  assert.equal(frame.data.waitedMs, 12);
+  assert.equal(frame.data.framebufferUpdates, 5, 'the captured frame count is authoritative');
+
+  await send(socketPath, { action: 'observe', params: { 'wait-change': true } });
+  assert.deepEqual(sessions[0].calls.filter(call => call.fn === 'waitForChange').at(-1).arg, { baseline: 6, timeoutMs: 5000 });
 });
 
 test('frames are pruned to the configured count', async t => {

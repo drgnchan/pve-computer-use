@@ -78,6 +78,9 @@ Targets are defined in ${configPath()}
 Commands:
   status                                   console/session health + framebuffer size
   observe | screenshot                     save a frame, print its filePath
+  observe --wait-change [--wait-timeout 5000]
+                                           wait for the guest to redraw since the last
+                                           input action, then capture (changed: true|false)
   click --x <x> --y <y> [--button left|right|middle] [--space 1000]
   double-click --x <x> --y <y> [--button ...]
   move --x <x> --y <y>

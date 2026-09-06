@@ -13,7 +13,7 @@ description: Control and inspect a virtual machine on Proxmox VE through its VNC
 2. **Inspect**: 用 Pi 的 `read` 工具读取该图片，判断当前界面状态。
 3. **Plan**: 定位目标元素，确定最小且安全的下一步动作。
 4. **Act**: 执行 `pve-cu --target <name> click/type/key/...`。
-5. **Verify**: 任何改变画面的动作之后，都必须重新截图并 `read` 验证。
+5. **Verify**: 用 `observe --wait-change` 等客户机**真正重画**后再 `read` 验证，不要用固定 sleep 盲等。
 
 ```
    pve-cu observe → read <filePath> → 视觉分析与规划 → pve-cu click/type/key → 重复
@@ -37,7 +37,12 @@ pve-cu --target windows-vm status
 
 ```bash
 pve-cu --target windows-vm observe
+pve-cu --target windows-vm observe --wait-change                 # 等画面变化，最多 5s
+pve-cu --target windows-vm observe --wait-change --wait-timeout 15000   # 开机器/加载页面时用
 ```
+
+`--wait-change` 的基线是**上一个输入动作完成时的帧计数**，因此点击引起的重画会立刻返回；
+超时也不算失败（静止画面本来就不会推送更新），输出里 `changed: false` 时直接看截图内容判断。
 
 输出：
 
@@ -49,9 +54,13 @@ pve-cu --target windows-vm observe
   "height": 1080,
   "capturedAt": "2026-09-06T19:43:12.000Z",
   "framebufferUpdates": 42,
-  "lastUpdateAt": "2026-09-06T19:43:11.880Z"
+  "lastUpdateAt": "2026-09-06T19:43:11.880Z",
+  "changed": true,
+  "waitedMs": 320
 }
 ```
+
+（`changed` / `waitedMs` / `baselineUpdates` 只在使用 `--wait-change` 时出现。）
 
 **紧接着必须用 `read` 工具打开 `filePath` 看图**，不要凭想象描述界面。
 
@@ -120,6 +129,11 @@ pve-cu --target windows-vm daemon log       # 打印 daemon 日志路径
 6. **不要在命令行里出现任何密钥**：Token/密码只能来自环境变量与配置文件；日志与截图目录权限为 `0700/0600`。
 
 ## Operational Gotchas
+
+### A0. 用 --wait-change 代替盲等
+动作之后不要用 `sleep` 猜测等待时间。正确做法：
+`click/type/key` → `observe --wait-change [--wait-timeout N]` → `read` 看图。
+开机器、进 BIOS、系统启动、大页面加载这类慢变化，把 `--wait-timeout` 提到 15000~30000。
 
 ### A. 首帧需要时间
 `observe`/`status` 首次调用会完成认证、申请票据、启动无头浏览器并等待第一个 framebuffer update，

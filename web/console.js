@@ -143,6 +143,19 @@ function report() {
 
 export function consoleState() { return report(); }
 
+export async function waitForChange({ baseline = 0, timeoutMs = 5000, pollMs = 80 } = {}) {
+  assertConnected();
+  const started = Date.now();
+  const from = Number(baseline) || 0;
+  while (Date.now() - started < timeoutMs) {
+    if (state.updates > from) {
+      return { changed: true, waitedMs: Date.now() - started, baselineUpdates: from, framebufferUpdates: state.updates };
+    }
+    await sleep(pollMs);
+  }
+  return { changed: false, waitedMs: Date.now() - started, baselineUpdates: from, framebufferUpdates: state.updates };
+}
+
 export async function captureFrame({ format = 'png', jpegQuality = 0.9 } = {}) {
   const target = assertConnected();
   if (!state.updates) throw new Error('No framebuffer update received yet');
@@ -162,7 +175,7 @@ export async function mouse({ type, x, y, toX, toY, button = 'left', dy = 0, ste
     inBounds(x, y);
     const position = toElement(x, y);
     target._sendMouse(position.x, position.y, state.mask);
-    return { executed: 'move', ...position };
+    return { executed: 'move', ...position, framebufferUpdates: state.updates };
   }
   if (type === 'click') {
     inBounds(x, y);
@@ -173,7 +186,7 @@ export async function mouse({ type, x, y, toX, toY, button = 'left', dy = 0, ste
     target._handleMouseButton(position.x, position.y, state.mask & ~bit);
     state.mask &= ~bit;
     await sleep(delayMs + 20);
-    return { executed: 'click', button, clicks: 1, ...position };
+    return { executed: 'click', button, clicks: 1, ...position, framebufferUpdates: state.updates };
   }
   if (type === 'double') {
     inBounds(x, y);
@@ -186,7 +199,7 @@ export async function mouse({ type, x, y, toX, toY, button = 'left', dy = 0, ste
       state.mask &= ~bit;
       await sleep(60);
     }
-    return { executed: 'double', button, ...position };
+    return { executed: 'double', button, ...position, framebufferUpdates: state.updates };
   }
   if (type === 'drag') {
     inBounds(x, y); inBounds(toX, toY);
@@ -203,7 +216,7 @@ export async function mouse({ type, x, y, toX, toY, button = 'left', dy = 0, ste
     }
     target._handleMouseButton(to.x, to.y, state.mask & ~bit);
     state.mask &= ~bit;
-    return { executed: 'drag', button, from, to };
+    return { executed: 'drag', button, from, to, framebufferUpdates: state.updates };
   }
   if (type === 'scroll') {
     inBounds(x, y);
@@ -216,7 +229,7 @@ export async function mouse({ type, x, y, toX, toY, button = 'left', dy = 0, ste
       target._handleMouseButton(position.x, position.y, state.mask);
       await sleep(delayMs + 18);
     }
-    return { executed: 'scroll', dy, ticks, ...position };
+    return { executed: 'scroll', dy, ticks, ...position, framebufferUpdates: state.updates };
   }
   throw new Error(`Unknown mouse action: ${type}`);
 }
@@ -224,7 +237,7 @@ export async function mouse({ type, x, y, toX, toY, button = 'left', dy = 0, ste
 export async function typeChars({ chars, delayMs = 22 }) {
   const target = assertConnected();
   for (const key of chars) await tap(target, key, delayMs);
-  return { executed: 'type', length: chars.length };
+  return { executed: 'type', length: chars.length, framebufferUpdates: state.updates };
 }
 
 export async function keyCombo({ keys, holdMs = 45, delayMs = 20 }) {
@@ -232,7 +245,7 @@ export async function keyCombo({ keys, holdMs = 45, delayMs = 20 }) {
   for (const key of keys) { pressKey(target, key); await sleep(delayMs); }
   await sleep(holdMs);
   for (const key of keys.slice().reverse()) { releaseKey(target, key); await sleep(delayMs); }
-  return { executed: 'key', keys: keys.map(key => key.code) };
+  return { executed: 'key', keys: keys.map(key => key.code), framebufferUpdates: state.updates };
 }
 
 export async function releaseAll({ delayMs = 15 } = {}) {
@@ -247,7 +260,7 @@ export async function releaseAll({ delayMs = 15 } = {}) {
     try { target._sendMouse(0, 0, 0); } catch {}
     state.mask = 0;
   }
-  return { executed: 'reset', releasedKeys: released };
+  return { executed: 'reset', releasedKeys: released, framebufferUpdates: state.updates };
 }
 
 export function disconnectConsole() {
@@ -256,6 +269,6 @@ export function disconnectConsole() {
 }
 
 window.pveConsole = {
-  startConsole, waitConnected, consoleState, captureFrame, mouse,
+  startConsole, waitConnected, consoleState, waitForChange, captureFrame, mouse,
   typeChars, keyCombo, releaseAll, disconnectConsole,
 };

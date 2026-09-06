@@ -16,6 +16,7 @@ export class PveDaemon {
     this.sessionPromise = null;
     this.queue = Promise.resolve();
     this.latestFrame = null;
+    this.actionBaseline = null;
     this.server = null;
     this.shuttingDown = false;
     this.startedAt = Date.now();
@@ -140,7 +141,13 @@ export class PveDaemon {
 
       case 'observe':
       case 'screenshot':
-        return { ok: true, data: await this.capture() };
+        return {
+          ok: true,
+          data: await this.capture({
+            waitChange: Boolean(params['wait-change'] ?? params.waitChange),
+            waitTimeoutMs: Number(params['wait-timeout'] ?? params.waitTimeout ?? 5_000),
+          }),
+        };
 
       case 'click':
       case 'double_click':
@@ -148,14 +155,14 @@ export class PveDaemon {
         const session = await this.ensureSession();
         const { x, y } = this.position(params);
         const button = this.button(params.button);
-        const data = await session.evaluate('mouse', { type: action === 'click' ? 'click' : 'double', x, y, button });
+        const data = this.noteAction(await session.evaluate('mouse', { type: action === 'click' ? 'click' : 'double', x, y, button }));
         return { ok: true, data: { ...data, normX: normalize(x, this.dims().width), normY: normalize(y, this.dims().height) } };
       }
 
       case 'move': {
         const session = await this.ensureSession();
         const { x, y } = this.position(params);
-        const data = await session.evaluate('mouse', { type: 'move', x, y });
+        const data = this.noteAction(await session.evaluate('mouse', { type: 'move', x, y }));
         return { ok: true, data: { ...data, normX: normalize(x, this.dims().width), normY: normalize(y, this.dims().height) } };
       }
 
@@ -166,7 +173,7 @@ export class PveDaemon {
         const fromY = coordinate(pick(params, ['from-y', 'fromY', 'from_y']), height);
         const toX = coordinate(pick(params, ['to-x', 'toX', 'to_x']), width);
         const toY = coordinate(pick(params, ['to-y', 'toY', 'to_y']), height);
-        const data = await session.evaluate('mouse', { type: 'drag', x: fromX, y: fromY, toX, toY, button: this.button(params.button) });
+        const data = this.noteAction(await session.evaluate('mouse', { type: 'drag', x: fromX, y: fromY, toX, toY, button: this.button(params.button) }));
         return { ok: true, data };
       }
 
@@ -175,14 +182,14 @@ export class PveDaemon {
         const { x, y } = this.position(params);
         const dy = Number(params.dy ?? params.deltaY ?? 3);
         if (!Number.isFinite(dy) || dy === 0) throw new Error('scroll needs a non-zero --dy');
-        const data = await session.evaluate('mouse', { type: 'scroll', x, y, dy });
+        const data = this.noteAction(await session.evaluate('mouse', { type: 'scroll', x, y, dy }));
         return { ok: true, data };
       }
 
       case 'type': {
         const session = await this.ensureSession();
         const text = String(params.text ?? '');
-        const data = await session.evaluate('typeChars', { chars: textPlan(text) });
+        const data = this.noteAction(await session.evaluate('typeChars', { chars: textPlan(text) }));
         return { ok: true, data: { ...data, typed: text.length } };
       }
 
@@ -190,13 +197,13 @@ export class PveDaemon {
       case 'keypress': {
         const session = await this.ensureSession();
         const keys = comboPlan(params.keys ?? params.key);
-        const data = await session.evaluate('keyCombo', { keys });
+        const data = this.noteAction(await session.evaluate('keyCombo', { keys }));
         return { ok: true, data: { ...data, keys: keys.map(key => key.code).join('+') } };
       }
 
       case 'reset': {
         if (!this.session) return { ok: true, data: { executed: 'reset', releasedKeys: 0, note: 'no session' } };
-        const data = await this.session.evaluate('releaseAll', {});
+        const data = this.noteAction(await this.session.evaluate('releaseAll', {}));
         return { ok: true, data };
       }
 
@@ -229,8 +236,26 @@ export class PveDaemon {
     return button;
   }
 
-  async capture() {
+  /** Frame counter right after an input action: the baseline for --wait-change. */
+  noteAction(data) {
+    if (Number.isFinite(data?.framebufferUpdates)) this.actionBaseline = data.framebufferUpdates;
+    return data;
+  }
+
+  async capture({ waitChange = false, waitTimeoutMs = 5_000 } = {}) {
     const session = await this.ensureSession();
+
+    // Wait for the guest to actually redraw instead of sleeping a fixed time.
+    let change = null;
+    if (waitChange) {
+      const baseline = Number.isFinite(this.actionBaseline)
+        ? this.actionBaseline
+        : (await session.evaluate('consoleState')).framebufferUpdates ?? 0;
+      const timeoutMs = Math.max(0, Math.min(120_000, Number(waitTimeoutMs) || 0));
+      change = await session.evaluate('waitForChange', { baseline, timeoutMs });
+      if (Number.isFinite(change?.framebufferUpdates)) this.actionBaseline = change.framebufferUpdates;
+    }
+
     const frame = await session.capture();
     const extension = frame.format === 'jpeg' ? 'jpg' : 'png';
     const frameId = `frame_${new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').replace('Z', '')}_${crypto.randomBytes(3).toString('hex')}`;
@@ -238,7 +263,7 @@ export class PveDaemon {
     fs.writeFileSync(filePath, Buffer.from(frame.image, 'base64'), { mode: 0o600 });
     this.latestFrame = { frameId, filePath, width: frame.width, height: frame.height, capturedAt: new Date().toISOString() };
     this.pruneFrames();
-    return { ...this.latestFrame, framebufferUpdates: frame.framebufferUpdates, lastUpdateAt: frame.lastUpdateAt, target: this.config.target };
+    return { ...this.latestFrame, ...(change || {}), framebufferUpdates: frame.framebufferUpdates, lastUpdateAt: frame.lastUpdateAt, target: this.config.target };
   }
 
   pruneFrames() {
