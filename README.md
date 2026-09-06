@@ -188,6 +188,31 @@ pve-cu --target windows-vm tlscheck      # 可达性 + 证书固定校验，不�
 
 ---
 
+## 与 SecureLink TOTP MCP 的衔接
+
+`~/tools/securelink-auth-mcp` 的 `securelink_enter_totp` 可以把验证码直接送进
+某台固定的 PVE 虚拟机控制台（种子仍只在本地 Keyring，验证码不出现在工具参数与返回值里）：
+
+```bash
+# MCP server 的环境（Pi MCP Adapter 配置里设置）
+SECURELINK_TOTP_BACKEND=pve
+SECURELINK_TOTP_PVE_TARGET=windows-vm
+```
+
+安全约束：
+
+- 工具**无参数**，目标机器由环境固定，模型无法临时改投别的 VM。
+- 发送前先向该 target 的 Daemon 要 `status`，必须同时满足
+  `target`/`node`/`vmid` 与配置一致且 `connected: true`，否则拒绝输入。
+- Daemon 必须已在运行（`pve-cu --target <name> status`）；MCP 不会自己拉起它。
+- 返回值里带 `channel`（backend/target/node/vmid），便于核对验证码去了哪台机器。
+- 不设 `SECURELINK_TOTP_BACKEND` 时行为完全不变，仍走 One-KVM 硬件。
+
+调用前仍必须由 Agent 看图确认 MFA 输入框已聚焦；返回 `entered: true` 只代表输入完成，
+是否登录成功要再截图判断。
+
+---
+
 ## 已知限制
 
 - **首次截图**需等待 RFB 握手和第一个 framebuffer update，`status`/`observe` 超时设为 120s。
@@ -229,7 +254,7 @@ pve-cu --target windows-vm tlscheck      # 可达性 + 证书固定校验，不�
 **尚缺的一步：真实控制台联调**（需要 API Token 与运行中的 VM）。首次联调建议顺序：
 
 ```bash
-pve-cu --target windows-vm fingerprint   # 固定证书
+pve-cu --target windows-vm tlscheck      # 已通过：pinned-fingerprint, realms pam/pve
 pve-cu --target windows-vm status        # 认证 + 票据 + RFB 连接
 pve-cu --target windows-vm observe       # 看第一张截图
 pve-cu --target windows-vm click --x 0.5 --y 0.5
