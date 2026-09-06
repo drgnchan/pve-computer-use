@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createPinnedAgent, isFingerprint } from './tls-pinning.js';
+import { createPinnedAgent, isFingerprint, normalizeFingerprint } from './tls-pinning.js';
 
 export function configPath() {
   return process.env.PVE_CU_CONFIG || path.join(os.homedir(), '.config/pve-cu/config.json');
@@ -56,6 +56,7 @@ export function loadConfig(target, file = configPath()) {
     target, configPath: file, endpoint: endpoint.origin, node: entry.node, vmid: entry.vmid,
     auth: entry.auth || {}, runtimeDir, framesDir, socketPath: entry.socketPath || path.join(runtimeDir, 'daemon.sock'),
     tlsOptions, tlsMode: entry.caFile ? 'ca-file' : entry.tlsFingerprint ? 'pinned-fingerprint' : entry.insecureTls ? 'insecure' : 'system-trust',
+    tlsFingerprint: entry.tlsFingerprint ? normalizeFingerprint(entry.tlsFingerprint) : null, caFile: entry.caFile || null,
     insecureTls: entry.insecureTls === true && !entry.caFile && !entry.tlsFingerprint,
     imageFormat: entry.imageFormat === 'jpeg' ? 'jpeg' : 'png', jpegQuality: entry.jpegQuality ?? 0.9, frameKeep: entry.frameKeep ?? 20,
     // Release the console ticket and the headless browser when idle; the next

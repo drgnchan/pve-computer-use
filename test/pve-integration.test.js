@@ -166,6 +166,72 @@ test('the real CLI + daemon + PVE client drive a console end to end', { skip, ti
   assert.equal(fs.existsSync(path.join(dir, 'lab', 'daemon.sock')), false, 'the socket must be removed on shutdown');
 });
 
+test('doctor reports a progressive setup checklist', { skip, timeout: 400_000 }, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pve-cu-doctor-'));
+  const pve = new FakePve(selfSignedCert(dir));
+  const endpoint = await pve.listen();
+  const { fingerprint } = await new PveApi({ endpoint, node: 'lab', vmid: 105, tlsOptions: {} }).peerFingerprint();
+  const configFile = path.join(dir, 'config.json');
+  fs.writeFileSync(configFile, JSON.stringify({
+    executablePath: CHROME,
+    targets: { lab: { endpoint, node: 'lab', vmid: 105, cacheDir: dir, tlsFingerprint: fingerprint, auth: { tokenId: 'pve-cu@pve!console', tokenSecretEnv: 'PVE_CU_FAKE_TOKEN' } } },
+  }));
+  const env = { PVE_CU_CONFIG: configFile, PVE_CU_FAKE_TOKEN: FAKE_TOKEN_SECRET };
+  t.after(async () => { await run(['--target', 'lab', 'daemon', 'stop'], env); await pve.close(); });
+
+  const check = (report, name) => report.checks.find(entry => entry.name === name);
+
+  // No credentials are sent by the plain check.
+  const plain = json(await run(['--target', 'lab', 'doctor'], env));
+  assert.equal(plain.ok, true, JSON.stringify(plain.checks));
+  assert.deepEqual(plain.checks.map(entry => entry.name), ['config', 'bundle', 'chromium', 'tls', 'api', 'credentials', 'daemon']);
+  assert.equal(check(plain, 'tls').ok, true);
+  assert.match(check(plain, 'tls').detail, new RegExp(fingerprint.slice(0, 12)));
+  assert.equal(check(plain, 'credentials').ok, true);
+  assert.match(check(plain, 'credentials').detail, /value not shown/);
+  assert.equal(check(plain, 'daemon').ok, true, 'an unstarted daemon is not a failure');
+  assert.equal(pve.records.loginBodies.length, 0, 'the plain check must not log in');
+
+  const withAuth = json(await run(['--target', 'lab', 'doctor', '--auth'], env));
+  assert.equal(withAuth.ok, true, JSON.stringify(withAuth.checks));
+  assert.equal(check(withAuth, 'auth').ok, true);
+  assert.match(check(withAuth, 'auth').detail, /api-token login accepted; VMID 105 "fake-vm" is running/);
+  assert.equal(check(withAuth, 'vm-running').ok, true);
+
+  const withConsole = json(await run(['--target', 'lab', 'doctor', '--console'], env));
+  assert.equal(withConsole.ok, true, JSON.stringify(withConsole.checks));
+  assert.equal(check(withConsole, 'console').ok, true);
+  assert.match(check(withConsole, 'console').detail, /frame 160x100 saved to /);
+  assert.equal(check(withConsole, 'daemon').ok, true);
+});
+
+test('doctor flags a missing secret and an unpinned certificate', { skip: !hasOpenssl, timeout: 200_000 }, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pve-cu-doctor-bad-'));
+  const pve = new FakePve(selfSignedCert(dir));
+  const endpoint = await pve.listen();
+  t.after(async () => pve.close());
+  const configFile = path.join(dir, 'config.json');
+  // Deliberately unpinned and without the secret in the environment.
+  fs.writeFileSync(configFile, JSON.stringify({
+    executablePath: CHROME,
+    targets: { lab: { endpoint, node: 'lab', vmid: 105, cacheDir: dir, auth: { tokenId: 'pve-cu@pve!console', tokenSecretEnv: 'PVE_CU_MISSING_TOKEN' } } },
+  }));
+  const env = { PVE_CU_CONFIG: configFile };
+
+  const result = await run(['--target', 'lab', 'doctor'], env);
+  assert.equal(result.exitCode, 1);
+  const report = json(result);
+  assert.equal(report.ok, false);
+  const check = name => report.checks.find(entry => entry.name === name);
+  assert.equal(check('tls').ok, false);
+  assert.match(check('tls').detail, /is not pinned/);
+  assert.match(check('tls').hint, /tlsFingerprint/);
+  assert.equal(check('api').ok, false, 'an unpinned certificate must also block the API call');
+  assert.equal(check('credentials').ok, false);
+  assert.match(check('credentials').hint, /export PVE_CU_MISSING_TOKEN=/);
+  assert.equal(pve.records.statusRequests, 0);
+});
+
 test('a stopped VM is reported instead of opening a console', { skip, timeout: 200_000 }, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pve-cu-stopped-'));
   const pve = new FakePve({ ...selfSignedCert(dir), running: false });

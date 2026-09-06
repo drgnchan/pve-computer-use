@@ -154,6 +154,9 @@ pve-cu --target windows-vm daemon stop
 pve-cu targets
 pve-cu --target windows-vm fingerprint   # 证书指纹（用于固定）
 pve-cu --target windows-vm tlscheck      # 可达性 + 证书固定校验，不发送凭据
+pve-cu --target windows-vm doctor        # 安装自检清单（不发凭据）
+pve-cu --target windows-vm doctor --auth     # 额外登录并读 VM 状态
+pve-cu --target windows-vm doctor --console  # 额外开真实控制台并截一帧
 ```
 
 坐标：`0.0~1.0` 归一化、当前 framebuffer 像素，或 `--x 500 --y 500 --space 1000` 自定义坐标空间。
@@ -238,12 +241,12 @@ SECURELINK_TOTP_PVE_TARGET=windows-vm
 - 握手**只下发 leaf**（链长 1），因此无法从握手引导出 CA
 - `tlscheck`：指纹固定生效，`/access/domains` 返回 `pam`/`pve`，往返 41ms
 
-**已离线验证**（`npm test`，23 个用例全绿）：
+**已离线验证**（`npm test`，27 个用例全绿）：
 
 - **mock PVE 全链路**（真 `bin/pve-cu.js` → 真 Daemon → 真 PveApi/Bridge/Chromium → 假 PVE REST+WebSocket）：
   API Token 与用户密码两种认证、`vncproxy(websocket=1)` 参数、CSRF 头、
   **WebSocket 升级必须带 API 认证**、截图落盘为 PNG、click/right/scroll/drag/key/type/reset、
-  401 与坐标越界拒绝、`daemon stop` 清理 socket、VM 停止时不开控制台
+  401 与坐标越界拒绝、`daemon stop` 清理 socket、VM 停止时不开控制台、`doctor` 三种模式
 - 配置校验、坐标换算（归一化/像素/自定义 space）、按键与组合键 keysym+DOM code 规划、CLI 参数解析
 - loopback bridge：页面托管、token 校验、`binary` 子协议、Cookie/Authorization 头透传、双向字节转发
 - Daemon：动作串行派发、截图落盘（0600）与按数量裁剪、非法输入在触达控制台前被拒绝
@@ -258,11 +261,17 @@ SECURELINK_TOTP_PVE_TARGET=windows-vm
 **尚缺的一步：真实控制台联调**（需要 API Token 与运行中的 VM）。首次联调建议顺序：
 
 ```bash
+pve-cu --target windows-vm doctor --console  # 一条命令跑完：配置/构建/Chrome/证书/API/凭据/控制台截图
+# 或分步排查：
 pve-cu --target windows-vm tlscheck      # 已通过：pinned-fingerprint, realms pam/pve
+pve-cu --target windows-vm doctor --auth # 认证 + 权限 + VM 状态
 pve-cu --target windows-vm status        # 认证 + 票据 + RFB 连接
 pve-cu --target windows-vm observe       # 看第一张截图
 pve-cu --target windows-vm click --x 0.5 --y 0.5
 pve-cu --target windows-vm observe       # 确认鼠标绝对定位正确
 ```
+
+`doctor` 的默认模式**不发送任何凭据**（只读配置、检查构建产物与 Chrome、做 TLS 握手、
+请求无需认证的 `/access/domains`）；`--auth` 才会登录，`--console` 才会开控制台。
 
 调试日志：`~/.cache/pve-cu/<target>/daemon.log`；`PVE_CU_DEBUG=1` 输出完整堆栈。

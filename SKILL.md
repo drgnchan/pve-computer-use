@@ -98,10 +98,16 @@ pve-cu --target windows-vm daemon stop
 
 ```bash
 pve-cu targets
-pve-cu --target windows-vm fingerprint  # 证书 SHA-256，写进 config 的 tlsFingerprint
-pve-cu --target windows-vm tlscheck     # 可达性 + 证书固定是否生效
-pve-cu --target windows-vm daemon log   # 打印 daemon 日志路径
+pve-cu --target windows-vm doctor           # 安装自检清单，不发送凭据
+pve-cu --target windows-vm doctor --auth    # 额外登录并读 VM 状态（会发送凭据）
+pve-cu --target windows-vm fingerprint      # 证书 SHA-256，写进 config 的 tlsFingerprint
+pve-cu --target windows-vm tlscheck         # 可达性 + 证书固定是否生效
+pve-cu --target windows-vm daemon log       # 打印 daemon 日志路径
 ```
+
+**遇到任何失败先跑 `doctor`**：它按 `config / bundle / chromium / tls / api / credentials / daemon`
+逐项给出 `ok`、`detail` 和 `hint`，比猜测快得多。向用户报告问题时直接引用失败项的 `hint`。
+只有用户明确要求验证登录时才加 `--auth`。
 
 ## Safety and Operational Rules
 

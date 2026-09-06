@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { configPath, listTargets, loadConfig } from './config.js';
 import { parseArgs } from './args.js';
+import { runDoctor } from './doctor.js';
 import { PveApi } from './pve-api.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -88,6 +89,7 @@ Commands:
   reconnect                                drop and reopen the console session
   fingerprint                              print the PVE TLS certificate SHA-256 to pin
   tlscheck                                 verify endpoint + certificate pinning (no credentials sent)
+  doctor [--auth] [--console]              setup checklist; --auth logs in, --console opens a real console
   daemon start|stop|log
   targets                                  list configured targets
   help
@@ -114,6 +116,18 @@ async function main() {
   if (!target) fail('Missing --target <name> (or PVE_CU_TARGET); run `pve-cu targets`');
   let config;
   try { config = loadConfig(target); } catch (error) { return fail(error.message); }
+
+  if (command === 'doctor') {
+    // Progressive setup check; by default no credentials leave this machine.
+    const requestDaemon = (request, timeoutMs) => send(config.socketPath, request, timeoutMs);
+    if (options.console) { try { await ensureDaemon(config); } catch { /* reported by the daemon check */ } }
+    const report = await runDoctor(config, {
+      auth: Boolean(options.auth), console: Boolean(options.console), requestDaemon,
+    });
+    console.log(JSON.stringify(report, null, 2));
+    if (!report.ok) process.exit(1);
+    return;
+  }
 
   if (command === 'tlscheck') {
     // Setup helper: proves reachability + certificate pinning using an endpoint
