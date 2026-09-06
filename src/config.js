@@ -58,6 +58,10 @@ export function loadConfig(target, file = configPath()) {
     tlsOptions, tlsMode: entry.caFile ? 'ca-file' : entry.tlsFingerprint ? 'pinned-fingerprint' : entry.insecureTls ? 'insecure' : 'system-trust',
     insecureTls: entry.insecureTls === true && !entry.caFile && !entry.tlsFingerprint,
     imageFormat: entry.imageFormat === 'jpeg' ? 'jpeg' : 'png', jpegQuality: entry.jpegQuality ?? 0.9, frameKeep: entry.frameKeep ?? 20,
+    // Release the console ticket and the headless browser when idle; the next
+    // command transparently reopens a session. 0 keeps the session forever.
+    idleTimeoutMs: entry.idleTimeoutMs ?? 600_000,
+    idleCheckIntervalMs: entry.idleCheckIntervalMs ?? 0,
     executablePath: entry.executablePath || root.executablePath || process.env.PVE_CU_CHROME || '/usr/bin/google-chrome',
     connectTimeoutMs: entry.connectTimeoutMs ?? 25000, maxViewport: entry.maxViewport ?? 3840,
   };

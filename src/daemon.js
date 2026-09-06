@@ -19,6 +19,9 @@ export class PveDaemon {
     this.server = null;
     this.shuttingDown = false;
     this.startedAt = Date.now();
+    this.lastActivityAt = Date.now();
+    this.idleTimer = null;
+    this.idleReleases = 0;
   }
 
   async start() {
@@ -33,6 +36,8 @@ export class PveDaemon {
     });
     fs.chmodSync(this.config.socketPath, 0o600);
     log(`listening on ${this.config.socketPath}`);
+    if (this.config.idleTimeoutMs > 0) log(`idle release after ${Math.round(this.config.idleTimeoutMs / 1000)}s of inactivity`);
+    this.armIdleTimer();
 
     const stop = () => this.shutdown();
     process.on('SIGINT', stop);
@@ -83,16 +88,47 @@ export class PveDaemon {
     return await this.sessionPromise;
   }
 
+  /** Periodically drops an unused console session so the ticket and browser are not held forever. */
+  armIdleTimer() {
+    const timeout = this.config.idleTimeoutMs;
+    if (!(timeout > 0)) return;
+    const interval = this.config.idleCheckIntervalMs > 0
+      ? this.config.idleCheckIntervalMs
+      : Math.max(5_000, Math.min(60_000, Math.round(timeout / 10)));
+    this.idleTimer = setInterval(() => { this.enqueue(() => this.idleCheck()).catch(() => {}); }, interval);
+    this.idleTimer.unref?.();
+  }
+
+  async idleCheck() {
+    if (!this.session || this.shuttingDown) return;
+    const idleFor = Date.now() - this.lastActivityAt;
+    if (idleFor < this.config.idleTimeoutMs) return;
+    const session = this.session;
+    this.session = null;
+    this.sessionPromise = null;
+    this.idleReleases++;
+    log(`idle for ${Math.round(idleFor / 1000)}s: releasing the console session (ticket + browser); the next command reopens it`);
+    try { await session.close(); } catch {}
+  }
+
   async dispatch(request) {
     const action = request?.action;
     const params = request?.params || {};
+    // A ping only proves the daemon is alive; it must not keep a session pinned.
+    if (action !== 'ping') this.lastActivityAt = Date.now();
     switch (action) {
       case 'ping':
         return { ok: true, data: { status: 'pong', target: this.config.target, uptime: Math.round(process.uptime()) } };
 
       case 'status': {
         const session = await this.ensureSession();
-        return { ok: true, data: { ...await session.state(), startedAt: new Date(this.startedAt).toISOString(), latestFrame: this.latestFrame } };
+        return {
+          ok: true,
+          data: {
+            ...await session.state(), startedAt: new Date(this.startedAt).toISOString(), latestFrame: this.latestFrame,
+            idleTimeoutMs: this.config.idleTimeoutMs, idleForMs: Date.now() - this.lastActivityAt, idleReleases: this.idleReleases,
+          },
+        };
       }
 
       case 'reconnect': {
@@ -218,6 +254,7 @@ export class PveDaemon {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
     log('shutting down');
+    if (this.idleTimer) clearInterval(this.idleTimer);
     try { await this.session?.close(); } catch {}
     if (this.server) { try { this.server.close(); } catch {} }
     try { fs.unlinkSync(this.config.socketPath); } catch {}

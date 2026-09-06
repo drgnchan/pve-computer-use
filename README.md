@@ -91,6 +91,8 @@ npm run debug:rfb      # 单次连接 fake VNC server，打印握手/输入事�
 | `insecureTls` | 显式关闭校验，Daemon 启动时打印警告 |
 | `imageFormat` / `jpegQuality` | `png`（默认，文字清晰）或 `jpeg` |
 | `cacheDir` / `socketPath` / `frameKeep` | 运行目录、Socket 路径、保留截图数 |
+| `idleTimeoutMs` | 空闲多久后释放控制台会话（票据 + 无头浏览器），默认 600000；`0` 表示不释放 |
+| `idleCheckIntervalMs` | 空闲检查间隔，默认按 `idleTimeoutMs/10`（5~60s） |
 
 **PVE 侧准备**（专用账号，最小权限）：
 
@@ -221,6 +223,8 @@ SECURELINK_TOTP_PVE_TARGET=windows-vm
 - noVNC 适配器使用了 `_handleMouseButton` / `_sendMouse` / `_framebufferUpdate` / `_display.flush` 等内部方法，
   已锁定 `@novnc/novnc` 1.7.0，升级前必须重跑 `npm test`（离线 RFB 端到端用例会立刻发现协议/内部 API 变化）。
 - 客户机分辨率变化时 Daemon 会重设浏览器视口；极端情况下建议手动 `observe` 一次再继续。
+- **空闲释放**：超过 `idleTimeoutMs` 没有动作，Daemon 会先释放所有按键再关闭会话（票据 + 浏览器），
+  避免长期占用控制台、也方便你自己开 PVE 网页控制台。下一条命令会自动重连，因此**久未操作后的第一条命令会慢几秒**，这是正常现象。
 - 若 Chromium 因内核缺少 user namespace 而无法启用沙箱，Daemon 会退回 `--no-sandbox` 并在 `status.notes` 中说明。
 
 ---

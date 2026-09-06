@@ -129,6 +129,36 @@ test('daemon rejects bad input without touching the console', async t => {
   for (const session of sessions) assert.equal(session.calls.length, 0);
 });
 
+test('an idle console session is released and reopened on demand', async t => {
+  const { sessions, socketPath } = await startDaemon(t, { idleTimeoutMs: 40, idleCheckIntervalMs: 15 });
+
+  const first = await send(socketPath, { action: 'status' });
+  assert.equal(first.ok, true);
+  assert.equal(sessions.length, 1);
+  assert.equal(first.data.idleReleases, 0);
+
+  await new Promise(resolve => setTimeout(resolve, 250));
+  assert.equal(sessions[0].closed, true, 'the idle session must be closed');
+
+  const second = await send(socketPath, { action: 'status' });
+  assert.equal(second.ok, true);
+  assert.equal(sessions.length, 2, 'the next command must reopen a session');
+  assert.equal(second.data.idleReleases, 1);
+  assert.equal(second.data.idleTimeoutMs, 40);
+  assert.ok(second.data.idleForMs < 1000);
+});
+
+test('a ping does not keep an idle session alive', async t => {
+  const { sessions, socketPath } = await startDaemon(t, { idleTimeoutMs: 40, idleCheckIntervalMs: 15 });
+
+  await send(socketPath, { action: 'status' });
+  for (let i = 0; i < 8; i++) {
+    await send(socketPath, { action: 'ping' });
+    await new Promise(resolve => setTimeout(resolve, 30));
+  }
+  assert.equal(sessions[0].closed, true, 'pings must not pin the console session');
+});
+
 test('frames are pruned to the configured count', async t => {
   const { socketPath, dir } = await startDaemon(t, { frameKeep: 3 });
   const paths = [];
