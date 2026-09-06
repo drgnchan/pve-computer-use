@@ -104,7 +104,7 @@ pve-cu --target windows-vm key --keys "up|down|left|right|home|end|pageup|pagedo
 **秘密（密码/token）绝不用 `--text` 传**（会进 argv 与进程列表）：
 
 ```bash
-pve-cu --target windows-vm type --from-file ~/.config/pve-cu/win-pass.txt   # 文件 0600
+pve-cu --target windows-vm type --from-file "$HOME/.pi/agent/secrets/windows-vm-password"   # 文件 0600
 cat pass.txt | pve-cu --target windows-vm type --stdin
 ```
 
