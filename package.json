@@ -1,0 +1,28 @@
+{
+  "name": "pve-computer-use",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Control a Proxmox VE VM console (screenshot + mouse/keyboard) from the command line",
+  "bin": {
+    "pve-cu": "./bin/pve-cu.js"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "for f in src/*.js scripts/*.mjs; do node --check \"$f\" || exit 1; done && node -e \"import('./web/dist/console.bundle.js').catch(()=>{})\" && echo syntax-ok",
+    "test": "node --test test/*.test.js",
+    "smoke": "node scripts/smoke-browser.mjs",
+    "debug:rfb": "node scripts/debug-rfb.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@novnc/novnc": "1.7.0",
+    "playwright-core": "^1.58.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.0"
+  }
+}

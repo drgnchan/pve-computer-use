@@ -1,0 +1,29 @@
+{
+  "executablePath": "/usr/bin/google-chrome",
+  "targets": {
+    "windows-vm": {
+      "endpoint": "https://192.0.2.10:8006",
+      "node": "pve-node",
+      "vmid": 105,
+      "auth": {
+        "tokenId": "pve-cu@pve!console",
+        "tokenSecretEnv": "PVE_CU_TOKEN_WINDOWS_VM"
+      },
+      "tlsFingerprint": "",
+      "imageFormat": "png",
+      "frameKeep": 20
+    },
+    "example-password-auth": {
+      "endpoint": "https://192.0.2.10:8006",
+      "node": "pve-node",
+      "vmid": 104,
+      "auth": {
+        "username": "pve-cu@pve",
+        "passwordEnv": "PVE_CU_PASSWORD_HERMES"
+      },
+      "caFile": "/home/user/.config/pve-cu/pve-ca.pem",
+      "imageFormat": "jpeg",
+      "jpegQuality": 0.85
+    }
+  }
+}
