@@ -263,7 +263,7 @@ export class PveDaemon {
     fs.writeFileSync(filePath, Buffer.from(frame.image, 'base64'), { mode: 0o600 });
     this.latestFrame = { frameId, filePath, width: frame.width, height: frame.height, capturedAt: new Date().toISOString() };
     this.pruneFrames();
-    return { ...this.latestFrame, ...(change || {}), framebufferUpdates: frame.framebufferUpdates, lastUpdateAt: frame.lastUpdateAt, target: this.config.target };
+    return { ...this.latestFrame, ...(change || {}), fullFrame: frame.fullFrame ?? null, framebufferUpdates: frame.framebufferUpdates, lastUpdateAt: frame.lastUpdateAt, target: this.config.target };
   }
 
   pruneFrames() {

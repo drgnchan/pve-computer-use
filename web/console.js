@@ -16,6 +16,7 @@ const RFB = resolveRFB(RFBModule);
 const state = {
   connected: false, failure: null, updates: 0, lastUpdateAt: null,
   width: 0, height: 0, mask: 0, held: [], desktopName: null,
+  fullFrameReady: false, fullFrameRequested: false,
 };
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -97,6 +98,9 @@ export function startConsole({ url, password }) {
     state.connected = true;
     state.width = target._display.width;
     state.height = target._display.height;
+    // The backbuffer is only trustworthy after a guaranteed full-frame update.
+    state.fullFrameReady = false;
+    state.fullFrameRequested = false;
   });
   target.addEventListener('desktopname', event => { state.desktopName = event.detail.name; });
   target.addEventListener('securityfailure', event => {
@@ -114,8 +118,11 @@ export function startConsole({ url, password }) {
     if (complete) {
       state.updates++;
       state.lastUpdateAt = new Date().toISOString();
+      const resized = state.width !== target._display.width || state.height !== target._display.height;
       state.width = target._display.width;
       state.height = target._display.height;
+      if (resized) { state.fullFrameReady = false; state.fullFrameRequested = false; }
+      if (state.fullFrameRequested) { state.fullFrameRequested = false; state.fullFrameReady = true; }
     }
     return complete;
   };
@@ -127,10 +134,35 @@ export async function waitConnected(timeoutMs = 20000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (state.failure) throw new Error(`Console connection failed: ${state.failure}`);
-    if (state.connected && state.updates > 0) return report();
+    if (state.connected && state.updates > 0) {
+      await ensureFullFrame(Math.min(8000, timeoutMs));
+      return report();
+    }
     await sleep(150);
   }
   throw new Error('Timed out waiting for the console framebuffer');
+}
+
+/**
+ * Asks the server for a non-incremental update and waits for it to complete.
+ * The RFB protocol obliges the server to answer with the whole framebuffer,
+ * so afterwards the backbuffer is complete instead of holding only the
+ * damaged regions that arrived since connect.
+ */
+export async function ensureFullFrame(timeoutMs = 4000) {
+  const target = rfb();
+  if (state.fullFrameReady) return true;
+  if (!state.connected) throw new Error('Console is not connected yet');
+  state.fullFrameRequested = true;
+  window.RFB.messages.fbUpdateRequest(target._sock, false, 0, 0, state.width, state.height);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (state.fullFrameReady) return true;
+    if (!state.connected) throw new Error(`Console disconnected while waiting for a full frame (${state.failure || ''})`.trim());
+    await sleep(50);
+  }
+  state.fullFrameRequested = false;
+  return false;
 }
 
 function report() {
@@ -159,13 +191,14 @@ export async function waitForChange({ baseline = 0, timeoutMs = 5000, pollMs = 8
 export async function captureFrame({ format = 'png', jpegQuality = 0.9 } = {}) {
   const target = assertConnected();
   if (!state.updates) throw new Error('No framebuffer update received yet');
+  const fullFrame = await ensureFullFrame(4000);
   await target._display.flush();
   if (!state.connected) throw new Error('Console disconnected while capturing');
   const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
   const dataUrl = target.toDataURL(mime, format === 'jpeg' ? jpegQuality : undefined);
   const marker = `data:${mime};base64,`;
   if (!dataUrl.startsWith(marker)) throw new Error('Unexpected framebuffer encoding');
-  return { ...report(), format, image: dataUrl.slice(marker.length) };
+  return { ...report(), fullFrame, format, image: dataUrl.slice(marker.length) };
 }
 
 export async function mouse({ type, x, y, toX, toY, button = 'left', dy = 0, steps = 12, delayMs = 12 }) {
@@ -269,6 +302,6 @@ export function disconnectConsole() {
 }
 
 window.pveConsole = {
-  startConsole, waitConnected, consoleState, waitForChange, captureFrame, mouse,
+  startConsole, waitConnected, consoleState, waitForChange, ensureFullFrame, captureFrame, mouse,
   typeChars, keyCombo, releaseAll, disconnectConsole,
 };

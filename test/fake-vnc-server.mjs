@@ -27,7 +27,10 @@ export class FakeVncServer {
   constructor({
     width = 64, height = 48, name = 'fake-pve-console',
     color = { r: 201, g: 32, b: 43 }, pattern = null, advertiseQemuExtKey = false, maxUpdates = 6, rejectAuth = false,
+    partialFirstUpdate = false,
   } = {}) {
+    this.partialFirstUpdate = partialFirstUpdate;
+    this.sentPartialFirstUpdate = false;
     this.pattern = pattern;
     this.rejectAuth = rejectAuth;
     this.width = width;
@@ -186,8 +189,13 @@ export class FakeVncServer {
       pseudo.writeInt32BE(QEMU_EXT_KEY_EVENT, 8);            // zero sized pseudo encoding rect
       rects.push(pseudo);
     }
-    const raw = Buffer.alloc(this.width * this.height * 4);
-    for (let y = 0; y < this.height; y++) {
+    // Emulate a server whose first update only carries damaged regions, so the
+    // client must request a full frame before the backbuffer is trustworthy.
+    const partial = this.partialFirstUpdate && !this.sentPartialFirstUpdate;
+    this.sentPartialFirstUpdate = true;
+    const rectHeight = partial ? Math.max(1, Math.floor(this.height / 2)) : this.height;
+    const raw = Buffer.alloc(this.width * rectHeight * 4);
+    for (let y = 0; y < rectHeight; y++) {
       for (let x = 0; x < this.width; x++) {
         const offset = (y * this.width + x) * 4;
         const pixel = this.pixelAt(x, y);
@@ -198,7 +206,7 @@ export class FakeVncServer {
     }
     const header = Buffer.alloc(12);
     header.writeUInt16BE(this.width, 4);
-    header.writeUInt16BE(this.height, 6);
+    header.writeUInt16BE(rectHeight, 6);
     header.writeInt32BE(RAW_ENCODING, 8);
     rects.push(Buffer.concat([header, raw]));
 

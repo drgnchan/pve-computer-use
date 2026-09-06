@@ -150,6 +150,24 @@ test('decoded framebuffer pixels keep the guest colour order', { skip, timeout: 
   });
 });
 
+test('a capture is complete even when the first update only carries damaged regions', { skip, timeout: 180_000 }, async t => {
+  await withSession(t, { width: 64, height: 48, pattern: 'quadrants', partialFirstUpdate: true }, async session => {
+    const frame = await session.capture();
+    assert.equal(frame.fullFrame, true, 'the capture must wait for a guaranteed full-frame update');
+    const pixels = await session.page.evaluate(() => {
+      const image = window.__rfb.getImageData();
+      const at = (x, y) => {
+        const index = (y * image.width + x) * 4;
+        return [image.data[index], image.data[index + 1], image.data[index + 2], image.data[index + 3]];
+      };
+      return { bottomLeft: at(4, image.height - 5), topRight: at(image.width - 5, 4) };
+    });
+    assert.deepEqual(pixels.bottomLeft.slice(0, 3), [0, 0, 255], 'the bottom half must be drawn after the full-frame request');
+    assert.equal(pixels.bottomLeft[3], 255, 'undrawn (transparent) pixels must not survive');
+    assert.deepEqual(pixels.topRight.slice(0, 3), [0, 255, 0]);
+  });
+});
+
 test('waitForChange returns on a server push and times out on a static screen', { skip, timeout: 180_000 }, async t => {
   await withSession(t, { width: 64, height: 48, maxUpdates: 2 }, async (session, vnc) => {
     const settled = await session.evaluate('consoleState');
