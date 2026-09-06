@@ -23,7 +23,12 @@ export function createPinnedAgent({ fingerprint, host, ca }) {
   const pinned = normalizeFingerprint(fingerprint);
   if (!isFingerprint(pinned)) throw new Error('tlsFingerprint must be a SHA-256 hex digest');
 
-  const agent = new https.Agent({ rejectUnauthorized: false, ca, keepAlive: false, maxSockets: 8 });
+  const agent = new https.Agent({
+    rejectUnauthorized: false, ca, keepAlive: false, maxSockets: 8,
+    // Abbreviated handshakes do not re-send the certificate, which would leave
+    // nothing to pin against. Always perform a full handshake instead.
+    maxCachedSessions: 0,
+  });
   const nativeConnect = agent.createConnection.bind(agent);
 
   agent.createConnection = (options, callback) => {
@@ -59,8 +64,11 @@ export function createPinnedAgent({ fingerprint, host, ca }) {
 export function verifyPeer(socket, pinned, host) {
   const certificate = socket.getPeerCertificate();
   const digest = normalizeFingerprint(certificate?.fingerprint256);
+  if (!digest) {
+    throw new Error(`No peer certificate to verify (pinned ${pinned}); refusing to send credentials`);
+  }
   if (digest !== pinned) {
-    throw new Error(`PVE certificate fingerprint mismatch (got ${digest || 'none'}, pinned ${pinned}); refusing to send credentials`);
+    throw new Error(`PVE certificate fingerprint mismatch (got ${digest}, pinned ${pinned}); refusing to send credentials`);
   }
   const addressError = host ? tls.checkServerIdentity(host, certificate) : null;
   if (addressError) {

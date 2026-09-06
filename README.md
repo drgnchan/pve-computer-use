@@ -47,7 +47,7 @@ cd ~/pve-computer-use
 npm install
 npm run build          # 生成 web/dist/console.bundle.js
 ln -s "$PWD/bin/pve-cu.js" ~/.local/bin/pve-cu
-npm test               # 14 个用例：坐标/按键规划、bridge 转发、daemon 派发、离线 RFB 端到端
+npm test               # 23 个用例：单元 + 离线 RFB 端到端 + mock PVE 全链路
 npm run smoke          # 无头 Chrome + bundle + 适配器接线检查（不需要 PVE）
 npm run debug:rfb      # 单次连接 fake VNC server，打印握手/输入事件，排查用
 ```
@@ -157,6 +157,9 @@ pve-cu --target windows-vm tlscheck      # 可达性 + 证书固定校验，不�
 坐标：`0.0~1.0` 归一化、当前 framebuffer 像素，或 `--x 500 --y 500 --space 1000` 自定义坐标空间。
 `--target` 也可以用环境变量 `PVE_CU_TARGET` 提供。
 
+参数解析：`--key value`、`--key=value`、`-t value` 均可。负数会被当成值（`--dy -2` 向上滚）；
+但以 `-` 开头的**文本**必须用 `=` 形式，例如 `pve-cu --target x type --text=-verbose`。
+
 `observe` 输出：
 
 ```json
@@ -206,12 +209,17 @@ pve-cu --target windows-vm tlscheck      # 可达性 + 证书固定校验，不�
 - 握手**只下发 leaf**（链长 1），因此无法从握手引导出 CA
 - `tlscheck`：指纹固定生效，`/access/domains` 返回 `pam`/`pve`，往返 41ms
 
-**已离线验证**（`npm test`，17 个用例全绿）：
+**已离线验证**（`npm test`，23 个用例全绿）：
 
-- 配置校验、坐标换算（归一化/像素/自定义 space）、按键与组合键 keysym+DOM code 规划
+- **mock PVE 全链路**（真 `bin/pve-cu.js` → 真 Daemon → 真 PveApi/Bridge/Chromium → 假 PVE REST+WebSocket）：
+  API Token 与用户密码两种认证、`vncproxy(websocket=1)` 参数、CSRF 头、
+  **WebSocket 升级必须带 API 认证**、截图落盘为 PNG、click/right/scroll/drag/key/type/reset、
+  401 与坐标越界拒绝、`daemon stop` 清理 socket、VM 停止时不开控制台
+- 配置校验、坐标换算（归一化/像素/自定义 space）、按键与组合键 keysym+DOM code 规划、CLI 参数解析
 - loopback bridge：页面托管、token 校验、`binary` 子协议、Cookie/Authorization 头透传、双向字节转发
 - Daemon：动作串行派发、截图落盘（0600）与按数量裁剪、非法输入在触达控制台前被拒绝
-- TLS 固定：正确指纹放行、错误指纹拒绝且**请求不会发出**、地址（SAN）不符拒绝、`caFile` 完整链校验、
+- TLS 固定：正确指纹放行、**连续多次请求仍放行**（TLS 会话复用会隐藏证书，已禁用 session 缓存）、
+  错误指纹拒绝且**请求不会发出**、地址（SAN）不符拒绝、`caFile` 完整链校验、
   bridge 的 `wss://` 上游同样受固定保护
 - **RFB 端到端**（自建 fake VNC server 承载于 WebSocket，模拟 PVE 的 vncwebsocket）：
   3.008 握手、VNC 认证（type 2，确认密码真的参与了 challenge 响应）、ServerInit/分辨率、

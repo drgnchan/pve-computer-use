@@ -40,8 +40,11 @@ export class ConsoleSession {
     if (!fs.existsSync(path.join(webRoot, 'dist/console.bundle.js'))) {
       throw new Error('web/dist/console.bundle.js is missing; run `npm run build` in the pve-computer-use directory');
     }
+    // Authenticate and reserve the console first: a credential or permission
+    // problem must not spawn a browser.
+    const ticket = await this.ticketProvider();
     await this.launchBrowser();
-    await this.openConsole();
+    await this.openConsole(ticket);
     return this.state();
   }
 
@@ -67,16 +70,16 @@ export class ConsoleSession {
     this.page.on('console', message => { if (message.type() === 'error') this.pageErrors.push(firstLine(message.text())); });
   }
 
-  /** Requests a fresh ticket and (re)connects the page to it. */
-  async openConsole() {
-    const ticket = await this.ticketProvider();
-    if (!ticket?.upstreamUrl) throw new Error('Console ticket provider returned no upstream URL');
-    if (!ticket.password) throw new Error('Console ticket provider returned no RFB password');
-    this.vmName = ticket.vmName;
+  /** Publishes a ticket to the page; pass one to reuse it, otherwise a fresh ticket is requested. */
+  async openConsole(ticket = null) {
+    const resolved = ticket ?? await this.ticketProvider();
+    if (!resolved?.upstreamUrl) throw new Error('Console ticket provider returned no upstream URL');
+    if (!resolved.password) throw new Error('Console ticket provider returned no RFB password');
+    this.vmName = resolved.vmName || this.vmName;
     this.upstreamClosed = null;
     this.bridge?.close().catch(() => {});
     this.bridge = await new ConsoleBridge({
-      upstreamUrl: ticket.upstreamUrl, headers: ticket.headers, tlsOptions: ticket.tlsOptions, webRoot,
+      upstreamUrl: resolved.upstreamUrl, headers: resolved.headers, tlsOptions: resolved.tlsOptions, webRoot,
       onUpstreamClosed: reason => { this.upstreamClosed = reason; },
     }).start();
 
@@ -84,7 +87,7 @@ export class ConsoleSession {
     await this.page.goto(this.bridge.pageUrl, { waitUntil: 'load', timeout: 20_000 });
     await this.page.evaluate(
       ({ url, password }) => window.pveConsole.startConsole({ url, password }),
-      { url: this.bridge.rfbUrl, password: ticket.password }
+      { url: this.bridge.rfbUrl, password: resolved.password }
     );
     const report = await this.page.evaluate(timeout => window.pveConsole.waitConnected(timeout), this.config.connectTimeoutMs);
     await this.fitViewport(report);

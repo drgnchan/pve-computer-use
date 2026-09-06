@@ -5,29 +5,13 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { configPath, listTargets, loadConfig } from './config.js';
+import { parseArgs } from './args.js';
 import { PveApi } from './pve-api.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const TIMEOUTS = { status: 120_000, observe: 120_000, screenshot: 120_000, reconnect: 120_000, default: 45_000 };
 const ALIASES = { screenshot: 'observe', doubleclick: 'double-click', keypress: 'key' };
-
-function parseArgs(argv) {
-  const options = {};
-  const positional = [];
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === '--') { positional.push(...argv.slice(i + 1)); break; }
-    if (arg.startsWith('-')) {
-      const key = arg.replace(/^-+/, '');
-      const name = key === 't' ? 'target' : key;
-      const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith('-')) { options[name] = next; i++; }
-      else options[name] = true;
-    } else positional.push(arg);
-  }
-  return { command: positional.shift() || 'status', positional, options };
-}
 
 function send(socketPath, request, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -97,7 +81,7 @@ Commands:
   double-click --x <x> --y <y> [--button ...]
   move --x <x> --y <y>
   drag --from-x <x1> --from-y <y1> --to-x <x2> --to-y <y2> [--button left]
-  scroll --x <x> --y <y> --dy <n>          n > 0 scrolls down, n < 0 up
+  scroll --x <x> --y <y> --dy <n>          n > 0 scrolls down, n < 0 up (use --dy=-2 form if needed)
   type --text "<ascii text>"
   key --keys "ctrl,l"                      combo or single key (Enter, Escape, f5, ...)
   reset                                    release every held key and mouse button

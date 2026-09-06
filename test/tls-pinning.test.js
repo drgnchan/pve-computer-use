@@ -1,29 +1,18 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { WebSocket, WebSocketServer } from 'ws';
-import path2 from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { WebSocket, WebSocketServer } from 'ws';
 import { ConsoleBridge } from '../src/bridge.js';
 import { PveApi } from '../src/pve-api.js';
 import { createPinnedAgent, normalizeFingerprint } from '../src/tls-pinning.js';
+import { hasOpenssl, selfSignedCert } from './helpers.mjs';
 
-const webRoot = path2.resolve(path2.dirname(fileURLToPath(import.meta.url)), '..', 'web');
-
-const hasOpenssl = (() => { try { execFileSync('openssl', ['version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
+const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const skip = hasOpenssl ? false : 'openssl not installed';
-
-function selfSignedCert(dir) {
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
-    '-keyout', path.join(dir, 'key.pem'), '-out', path.join(dir, 'cert.pem'),
-    '-subj', '/CN=127.0.0.1/O=Fake PVE',
-    '-addext', 'subjectAltName=IP:127.0.0.1,DNS:localhost'], { stdio: 'ignore' });
-  return { key: fs.readFileSync(path.join(dir, 'key.pem')), cert: fs.readFileSync(path.join(dir, 'cert.pem')) };
-}
 
 async function fakePve(tlsMaterial) {
   const served = { requests: 0 };
@@ -48,9 +37,16 @@ test('fingerprint pinning accepts the pinned leaf and never talks to an impostor
   assert.equal(info.selfSigned, true);
   assert.match(info.sans, /IP Address:127\.0\.0\.1/);
 
-  const ok = new PveApi(apiConfig(pve.endpoint, { agent: createPinnedAgent({ fingerprint: info.fingerprint, host: '127.0.0.1' }) }));
+  const pinnedAgent = createPinnedAgent({ fingerprint: info.fingerprint, host: '127.0.0.1' });
+  const ok = new PveApi(apiConfig(pve.endpoint, { agent: pinnedAgent }));
   assert.deepEqual(await ok.request('GET', '/version'), { version: '9.0.0', release: 'fake' });
   assert.equal(pve.served.requests, 1);
+
+  // Regression: a reused TLS session would hide the certificate and break pinning.
+  for (let round = 2; round <= 4; round++) {
+    assert.deepEqual(await ok.request('GET', '/version'), { version: '9.0.0', release: 'fake' }, `request ${round} must stay pinned`);
+    assert.equal(pve.served.requests, round);
+  }
 
   // `openssl x509 -fingerprint` style (upper case, colon separated) must work too.
   const colonForm = info.fingerprint.replace(/(.{2})(?=.)/g, '$1:').toUpperCase();
@@ -60,15 +56,15 @@ test('fingerprint pinning accepts the pinned leaf and never talks to an impostor
 
   const wrong = new PveApi(apiConfig(pve.endpoint, { agent: createPinnedAgent({ fingerprint: '0'.repeat(64), host: '127.0.0.1' }) }));
   await assert.rejects(() => wrong.request('GET', '/version'), /fingerprint mismatch/);
-  assert.equal(pve.served.requests, 2, 'a rejected certificate must not receive the request (no credential leak)');
+  assert.equal(pve.served.requests, 5, 'a rejected certificate must not receive the request (no credential leak)');
 
   const wrongHost = new PveApi(apiConfig(pve.endpoint, { agent: createPinnedAgent({ fingerprint: info.fingerprint, host: 'pve.example.invalid' }) }));
   await assert.rejects(() => wrongHost.request('GET', '/version'), /does not match pve\.example\.invalid/);
-  assert.equal(pve.served.requests, 2);
+  assert.equal(pve.served.requests, 5);
 
   // Without a pin the private CA must not be trusted silently.
   await assert.rejects(() => new PveApi(apiConfig(pve.endpoint, {})).request('GET', '/version'), /UNABLE_TO_VERIFY_LEAF_SIGNATURE|self-signed/);
-  assert.equal(pve.served.requests, 2);
+  assert.equal(pve.served.requests, 5);
 });
 
 test('the console bridge refuses a wss upstream whose certificate is not pinned', { skip }, async t => {

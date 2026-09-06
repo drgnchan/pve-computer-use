@@ -60,6 +60,9 @@ pve-cu --target windows-vm observe
 坐标支持归一化 `0.0~1.0`（左上 `0.0,0.0`，中心 `0.5,0.5`，右下 `1.0,1.0`），
 也支持当前 framebuffer 像素，或 `--space` 自定义坐标空间。
 
+负数参数两种写法都行（`--dy -3` 或 `--dy=-3`）；但**以 `-` 开头的文本**必须用 `=`，
+例如 `type --text=-verbose`，否则会被当成开关。
+
 ```bash
 pve-cu --target windows-vm click --x 0.5 --y 0.5
 pve-cu --target windows-vm click --x 0.8 --y 0.2 --button right
@@ -89,6 +92,15 @@ pve-cu --target windows-vm key --keys "up|down|left|right|home|end|pageup|pagedo
 pve-cu --target windows-vm reset        # 释放所有按键与鼠标按钮，防止卡键
 pve-cu --target windows-vm reconnect    # 票据过期或连接中断后重连
 pve-cu --target windows-vm daemon stop
+```
+
+排错用（不发送凭据、不触碰 VM）：
+
+```bash
+pve-cu targets
+pve-cu --target windows-vm fingerprint  # 证书 SHA-256，写进 config 的 tlsFingerprint
+pve-cu --target windows-vm tlscheck     # 可达性 + 证书固定是否生效
+pve-cu --target windows-vm daemon log   # 打印 daemon 日志路径
 ```
 
 ## Safety and Operational Rules
