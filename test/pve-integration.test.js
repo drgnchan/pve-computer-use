@@ -128,6 +128,13 @@ test('the real CLI + daemon + PVE client drive a console end to end', { skip, ti
   const reset = json(await cli(['lab', 'reset']));
   assert.equal(reset.executed, 'reset');
 
+  // Secret-safe typing: the text comes from a file, never from argv.
+  const secretFile = path.join(dir, 'secret.txt');
+  fs.writeFileSync(secretFile, 'ok\n', { mode: 0o600 });
+  const fromFile = json(await cli(['lab', 'type', '--from-file', secretFile]));
+  assert.equal(fromFile.typed, 2, `type --from-file failed: ${fromFile.error || ''}`);
+  assert.deepEqual(pve.vnc.events.qemuKeyEvents.slice(-4).map(event => event.keysym), [0x6f, 0x6f, 0x6b, 0x6b]);
+
   // --- rejection paths ---------------------------------------------------
   const outOfRange = await cli(['lab', 'click', '--x', '9999', '--y', '1']);
   assert.equal(outOfRange.exitCode, 1);

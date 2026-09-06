@@ -21,6 +21,7 @@ export class ConsoleBridge {
     this.upstream = null;
     this.server = null;
     this.wss = null;
+    this.stats = { clientMessages: 0, clientBytes: 0, forwardedMessages: 0, forwardedBytes: 0, queuedMessages: 0, upstreamMessages: 0, upstreamBytes: 0, upstreamErrors: 0 };
   }
 
   async start() {
@@ -64,6 +65,8 @@ export class ConsoleBridge {
     this.wss.handleUpgrade(req, socket, head, client => this.attach(client));
   }
 
+  getStats() { return { ...this.stats }; }
+
   attach(client) {
     if (this.upstream) { try { this.upstream.close(); } catch {} }
     const upstream = this.upstream = new WebSocket(this.upstreamUrl, ['binary'], {
@@ -77,18 +80,27 @@ export class ConsoleBridge {
     };
 
     client.on('message', (data, isBinary) => {
-      if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary: isBinary });
-      else if (upstream.readyState === WebSocket.CONNECTING) queued.push([data, isBinary]);
-      else closed('client sent data before the PVE console was ready');
+      this.stats.clientMessages++;
+      this.stats.clientBytes += Buffer.byteLength(data);
+      if (upstream.readyState === WebSocket.OPEN) {
+        this.stats.forwardedMessages++;
+        this.stats.forwardedBytes += Buffer.byteLength(data);
+        upstream.send(data, { binary: isBinary });
+      } else if (upstream.readyState === WebSocket.CONNECTING) {
+        this.stats.queuedMessages++;
+        queued.push([data, isBinary]);
+      } else closed('client sent data before the PVE console was ready');
     });
     client.on('close', () => { if (this.upstream === upstream) { try { upstream.close(); } catch {} } });
     client.on('error', () => closed('local console socket error'));
 
     upstream.on('open', () => { for (const [data, isBinary] of queued.splice(0)) upstream.send(data, { binary: isBinary }); });
     upstream.on('message', (data, isBinary) => {
+      this.stats.upstreamMessages++;
+      this.stats.upstreamBytes += Buffer.byteLength(data);
       if (client.readyState === WebSocket.OPEN) client.send(data, { binary: isBinary });
     });
-    upstream.on('error', error => closed(`PVE console socket error: ${error.message}`));
+    upstream.on('error', error => { this.stats.upstreamErrors++; closed(`PVE console socket error: ${error.message}`); });
     upstream.on('close', (code, reason) => closed(`PVE console socket closed (${code}${reason ? ` ${reason}` : ''})`));
   }
 

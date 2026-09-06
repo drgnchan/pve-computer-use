@@ -87,6 +87,8 @@ Commands:
   drag --from-x <x1> --from-y <y1> --to-x <x2> --to-y <y2> [--button left]
   scroll --x <x> --y <y> --dy <n>          n > 0 scrolls down, n < 0 up (use --dy=-2 form if needed)
   type --text "<ascii text>"
+  type --from-file <path>                read the text from a 0600 file (secret-safe: nothing in argv)
+  cat secret | pve-cu --target <t> type --stdin
   key --keys "ctrl,l"                      combo or single key (Enter, Escape, f5, ...)
   reset                                    release every held key and mouse button
   reconnect                                drop and reopen the console session
@@ -168,6 +170,17 @@ async function main() {
   }
 
   const action = ALIASES[command] || command;
+
+  // Secrets must never travel through argv: read them from a file or stdin.
+  if (command === 'type' && (options['from-file'] || options.stdin)) {
+    if (options.text !== undefined) fail('use either --text or --from-file/--stdin, not both');
+    const raw = options['from-file']
+      ? fs.readFileSync(String(options['from-file']), 'utf8')
+      : fs.readFileSync(0, 'utf8');
+    options.text = raw.replace(/\r?\n$/, '');
+    delete options['from-file'];
+    delete options.stdin;
+  }
   try {
     await ensureDaemon(config);
     const response = await send(config.socketPath, { action, params: options }, TIMEOUTS[action] || TIMEOUTS.default);

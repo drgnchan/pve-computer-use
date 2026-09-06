@@ -95,6 +95,13 @@ pve-cu --target windows-vm key --keys "up|down|left|right|home|end|pageup|pagedo
 
 中文无法直接注入：需要客户机内已有中文输入法，用 `type` 打拼音，再用数字/空格选候选词，每一步都靠截图确认。
 
+**秘密（密码/token）绝不用 `--text` 传**（会进 argv 与进程列表）：
+
+```bash
+pve-cu --target windows-vm type --from-file ~/.config/pve-cu/win-pass.txt   # 文件 0600
+cat pass.txt | pve-cu --target windows-vm type --stdin
+```
+
 ### 5. Emergency Reset / Reconnect
 
 ```bash
@@ -170,3 +177,21 @@ PVE 用自己的集群 CA 签发证书，且握手时不下发该 CA，系统信
 Daemon 默认空闲 10 分钟就释放控制台会话（票据 + 无头浏览器），避免长期占着 VM 控制台。
 下一条命令会自动重新认证、申请票据并重连，因此**慢不等于失败**：
 等它返回（超时 120s），不要因为等待而并发重复发命令。
+
+### I. Windows 安全登录：先送 Ctrl+Alt+Del（实测踩坑）
+启用安全登录的机器在锁屏上**普通按键和点击只会“唤醒”屏幕**（时钟滑一下又回去），不会出凭据界面。
+必须：
+
+```bash
+pve-cu --target <t> key --keys "ctrl,alt,delete"
+```
+
+才会出现用户头像 + 密码框。看不到密码框时先送 SAS，再考虑其他原因。
+
+### J. 光标重绘滞后：单张截图不能判定输入失败（实测踩坑）
+Windows 在标准 VGA 上是软件光标，**光标位置的重绘可能滞后于输入**：move 之后截图里光标还在旧位置，
+但 guest 内部位置已经更新（下一次任意重绘时才画出来）。因此：
+
+1. 不要用“光标没动”判定鼠标失效；
+2. 用 `observe --wait-change` 抓输入引起的**次级效果**（动画、界面切换、弹窗）；
+3. 需要确认坐标命中时，点一个会产生可见反馈的元素（图标/按钮），而不是空壁纸。

@@ -125,12 +125,14 @@ export class ConsoleSession {
   async state() {
     const report = this.page ? await this.evaluate('consoleState') : { connected: false, width: 0, height: 0 };
     return {
+      ...report,
       target: this.config.target, endpoint: this.config.endpoint, node: this.config.node, vmid: this.config.vmid,
       vmName: this.vmName, authMethod: this.auth?.method || null, connected: report.connected,
       failure: report.failure || this.upstreamClosed || null, framebufferUpdates: report.framebufferUpdates ?? 0,
       lastUpdateAt: report.lastUpdateAt || null, width: report.width, height: report.height,
       desktopName: report.desktopName || null, heldKeys: report.heldKeys ?? 0, mouseMask: report.mouseMask ?? 0,
-      bridge: this.bridge ? this.bridge.origin : null, sandboxDisabled: this.sandboxDisabled,
+      bridge: this.bridge ? this.bridge.origin : null, bridgeStats: this.bridge?.getStats() ?? null,
+      sandboxDisabled: this.sandboxDisabled,
       tlsMode: this.config.tlsMode || (this.config.insecureTls ? 'insecure' : 'system-trust'),
       insecureTls: this.config.insecureTls, imageFormat: this.config.imageFormat, notes: this.notes, pageErrors: this.pageErrors.slice(-5),
     };

@@ -126,7 +126,7 @@ export class PveDaemon {
         return {
           ok: true,
           data: {
-            ...await session.state(), startedAt: new Date(this.startedAt).toISOString(), latestFrame: this.latestFrame,
+            ...await session.state(), pid: process.pid, startedAt: new Date(this.startedAt).toISOString(), latestFrame: this.latestFrame,
             idleTimeoutMs: this.config.idleTimeoutMs, idleForMs: Date.now() - this.lastActivityAt, idleReleases: this.idleReleases,
           },
         };
@@ -192,7 +192,6 @@ export class PveDaemon {
         const data = this.noteAction(await session.evaluate('typeChars', { chars: textPlan(text) }));
         return { ok: true, data: { ...data, typed: text.length } };
       }
-
       case 'key':
       case 'keypress': {
         const session = await this.ensureSession();

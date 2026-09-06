@@ -17,6 +17,7 @@ const state = {
   connected: false, failure: null, updates: 0, lastUpdateAt: null,
   width: 0, height: 0, mask: 0, held: [], desktopName: null,
   fullFrameReady: false, fullFrameRequested: false,
+  pointerSends: 0, keySends: 0, lastPointer: null, lastKey: null,
 };
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -127,6 +128,21 @@ export function startConsole({ url, password }) {
     return complete;
   };
   window.__rfb = target;
+
+  // Diagnostics: count what actually leaves toward the server, so a silent
+  // input path can be told apart from a server that ignores the event.
+  const sendMouse = target._sendMouse.bind(target);
+  target._sendMouse = (x, y, mask) => {
+    state.pointerSends++;
+    state.lastPointer = { x, y, mask };
+    return sendMouse(x, y, mask);
+  };
+  const sendKey = target.sendKey.bind(target);
+  target.sendKey = (keysym, code, down) => {
+    state.keySends++;
+    state.lastKey = { keysym, code, down };
+    return sendKey(keysym, code, down);
+  };
   return { started: true };
 }
 
@@ -166,10 +182,20 @@ export async function ensureFullFrame(timeoutMs = 4000) {
 }
 
 function report() {
+  const target = window.__rfb;
   return {
     connected: state.connected, failure: state.failure, framebufferUpdates: state.updates,
     lastUpdateAt: state.lastUpdateAt, width: state.width, height: state.height,
     desktopName: state.desktopName, heldKeys: state.held.length, mouseMask: state.mask,
+    pointerSends: state.pointerSends, keySends: state.keySends,
+    lastPointer: state.lastPointer, lastKey: state.lastKey,
+    rfb: target ? {
+      viewOnly: target.viewOnly,
+      connectionState: target._rfbConnectionState,
+      scale: target._display?._scale ?? null,
+      viewport: target._display?._viewportLoc ?? null,
+      mousePos: target._mousePos ?? null,
+    } : null,
   };
 }
 
