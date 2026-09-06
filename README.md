@@ -94,18 +94,35 @@ npm run debug:rfb      # 单次连接 fake VNC server，打印握手/输入事�
 | `idleTimeoutMs` | 空闲多久后释放控制台会话（票据 + 无头浏览器），默认 600000；`0` 表示不释放 |
 | `idleCheckIntervalMs` | 空闲检查间隔，默认按 `idleTimeoutMs/10`（5~60s） |
 
-**PVE 侧准备**（专用账号，最小权限）：
+**PVE 侧准备**（专用账号，最小权限；在 PVE 主机上执行）：
 
 ```bash
 pveum user add pve-cu@pve --comment "computer use"
-pveum acl modify /vms/105 --users pve-cu@pve --roles PVEVMUser   # 含 VM.Console
+# PVEVMUser 角色包含 VM.Console（源码确认：VM.Console 属于 privgroups 的 VM/user 组）
+pveum acl modify /vms/105 --users pve-cu@pve --roles PVEVMUser
+# 注意：privsep 默认为 1，那样 token 不继承用户 ACL、权限为零，必须显式传 0
 pveum user token add pve-cu@pve console --privsep 0
+# 输出形如：full-tokenid  pve-cu@pve!console
+#            value        xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx   （只显示这一次）
+pveum user token permissions pve-cu@pve 'pve-cu@pve!console'   # 可选：确认权限
 ```
 
-然后导出密钥（写进 `~/.bashrc` 或 systemd 环境，不要写进配置文件）：
+想更严可以把权限只给 token 而不给用户（`privsep` 保持默认的 1）：
+
+```bash
+pveum user add pve-cu@pve --comment "computer use"        # 用户本身不给任何 ACL
+pveum user token add pve-cu@pve console                    # privsep=1
+pveum acl modify /vms/105 --tokens 'pve-cu@pve!console' --roles PVEVMUser
+```
+
+> 本工具需要 `VM.Console`（开控制台）和读取 VM 状态的权限（`VM.Audit`，包含在 PVEVMUser 里）。
+> 不需要也不应该给 `Sys.*`、`VM.Config.*`、`VM.Allocate` 等权限。
+
+然后导出密钥（写进 `~/.bashrc` 或 systemd 环境，**不要写进配置文件**）：
 
 ```bash
 export PVE_CU_TOKEN_WINDOWS_VM='<token secret>'
+pve-cu --target windows-vm doctor --auth   # 验证登录、权限、节点名、VM 状态
 ```
 
 ### TLS 信任
