@@ -286,20 +286,18 @@ SECURELINK_TOTP_PVE_TARGET=windows-vm
   Raw framebuffer → PNG 截图、PointerEvent 绝对坐标与左右键/滚轮位、
   QEMU Extended Key Event（scancode 0x1d/0x26/0xc8 等）与普通 KeyEvent 回退路径、认证失败可见
 
-**尚缺的一步：真实控制台联调**（需要 API Token 与运行中的 VM）。首次联调建议顺序：
+**已完成真实联调**（`192.0.2.10:8006` / VMID 105 / Windows 11，2026-09-06）：
+
+- `tlscheck` / `doctor --console` 全绿；首帧 1280x800 完整（`fullFrame: true`）
+- 鼠标绝对定位、点击命中真实 UI、`--wait-change` 81ms 捕获变化
+- 键盘含 SAS：`ctrl,alt,delete` 唤出凭据界面（安全登录机器必须）
+- `type --from-file` + `Enter` 完成真实登录，进入桌面
+- 实测陷阱已写入 SKILL.md：光标重绘滞后（I）、安全登录需 SAS（J）
+
+复现联调：
 
 ```bash
-pve-cu --target windows-vm doctor --console  # 一条命令跑完：配置/构建/Chrome/证书/API/凭据/控制台截图
-# 或分步排查：
-pve-cu --target windows-vm tlscheck      # 已通过：pinned-fingerprint, realms pam/pve
-pve-cu --target windows-vm doctor --auth # 认证 + 权限 + VM 状态
-pve-cu --target windows-vm status        # 认证 + 票据 + RFB 连接
-pve-cu --target windows-vm observe       # 看第一张截图
-pve-cu --target windows-vm click --x 0.5 --y 0.5
-pve-cu --target windows-vm observe       # 确认鼠标绝对定位正确
+pve-cu --target windows-vm doctor --console   # 一条命令跑完全部检查
 ```
-
-`doctor` 的默认模式**不发送任何凭据**（只读配置、检查构建产物与 Chrome、做 TLS 握手、
-请求无需认证的 `/access/domains`）；`--auth` 才会登录，`--console` 才会开控制台。
 
 调试日志：`~/.cache/pve-cu/<target>/daemon.log`；`PVE_CU_DEBUG=1` 输出完整堆栈。
