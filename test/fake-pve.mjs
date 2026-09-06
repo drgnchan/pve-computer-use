@@ -22,7 +22,7 @@ function formBody(raw) {
  *   - vncwebsocket requires API auth *and* a matching vncticket/port
  */
 export class FakePve {
-  constructor({ cert, key, node = 'lab', vmid = 105, vmName = 'fake-vm', running = true, width = 160, height = 100, advertiseQemuExtKey = true }) {
+  constructor({ cert, key, node = 'lab', vmid = 105, vmName = 'fake-vm', running = true, width = 160, height = 100, advertiseQemuExtKey = true, pattern = null, color, rejectAuth = false }) {
     this.node = node;
     this.vmid = vmid;
     this.vmName = vmName;
@@ -35,7 +35,7 @@ export class FakePve {
     this.vncTicket = null;
     this.vncPort = 5900;
     this.vncPassword = null;
-    this.vnc = new FakeVncServer({ width, height, advertiseQemuExtKey, name: vmName });
+    this.vnc = new FakeVncServer({ width, height, advertiseQemuExtKey, name: vmName, pattern, color, rejectAuth });
     this.wss = new WebSocketServer({
       noServer: true,
       handleProtocols: protocols => (protocols.has('binary') ? 'binary' : false),

@@ -50,6 +50,7 @@ ln -s "$PWD/bin/pve-cu.js" ~/.local/bin/pve-cu
 npm test               # 23 个用例：单元 + 离线 RFB 端到端 + mock PVE 全链路
 npm run smoke          # 无头 Chrome + bundle + 适配器接线检查（不需要 PVE）
 npm run debug:rfb      # 单次连接 fake VNC server，打印握手/输入事件，排查用
+npm run mock-console   # 启动 mock PVE + 真 CLI 截一张四象限图，人工核对像素通道顺序
 ```
 
 依赖：Node 20+、系统 Chrome/Chromium（默认 `/usr/bin/google-chrome`）。`playwright-core` 不下载浏览器。
@@ -264,7 +265,7 @@ SECURELINK_TOTP_PVE_TARGET=windows-vm
 - 握手**只下发 leaf**（链长 1），因此无法从握手引导出 CA
 - `tlscheck`：指纹固定生效，`/access/domains` 返回 `pam`/`pve`，往返 41ms
 
-**已离线验证**（`npm test`，29 个用例全绿）：
+**已离线验证**（`npm test`，30 个用例全绿）：
 
 - **mock PVE 全链路**（真 `bin/pve-cu.js` → 真 Daemon → 真 PveApi/Bridge/Chromium → 假 PVE REST+WebSocket）：
   API Token 与用户密码两种认证、`vncproxy(websocket=1)` 参数、CSRF 头、
@@ -277,6 +278,9 @@ SECURELINK_TOTP_PVE_TARGET=windows-vm
   错误指纹拒绝且**请求不会发出**、地址（SAN）不符拒绝、`caFile` 完整链校验、
   bridge 的 `wss://` 上游同样受固定保护
 - `observe --wait-change`：服务端推送新帧时立即返回 `changed: true`，画面静止时按超时返回 `changed: false`
+- **像素通道顺序**：fake server 画四象限（红/绿/蓝/白），从 noVNC 解码后的 canvas 读回像素断言颜色不变；
+  `npm run mock-console` 还会产出一张真 PNG 供人工看图核对（noVNC 的 Raw 解码器对 32bpp 直接按字节拷贝，
+  因此线序必须是 R,G,B,X，即 QEMU 小端格式的 red-shift=0）
 - **RFB 端到端**（自建 fake VNC server 承载于 WebSocket，模拟 PVE 的 vncwebsocket）：
   3.008 握手、VNC 认证（type 2，确认密码真的参与了 challenge 响应）、ServerInit/分辨率、
   Raw framebuffer → PNG 截图、PointerEvent 绝对坐标与左右键/滚轮位、

@@ -4,11 +4,13 @@ import { WebSocketServer } from 'ws';
 // so the test helper reaches into node_modules by path).
 import { encodings } from '../node_modules/@novnc/novnc/core/encodings.js';
 
-// 32bpp / 24bit true colour, little endian BGRX - the layout QEMU's VNC server uses.
+// 32bpp / 24bit true colour, little endian. Like QEMU, the byte order on the wire
+// is R,G,B,X (red-shift 0); noVNC's raw decoder copies the bytes straight into the
+// canvas, so a big-endian shift declaration would swap red and blue.
 const PIXEL_FORMAT = Buffer.from([
   32, 24, 0, 1,
   0x00, 0xff, 0x00, 0xff, 0x00, 0xff,
-  16, 8, 0,
+  0, 8, 16,
   0, 0, 0,
 ]);
 
@@ -24,8 +26,9 @@ const RAW_ENCODING = encodings.encodingRaw;
 export class FakeVncServer {
   constructor({
     width = 64, height = 48, name = 'fake-pve-console',
-    color = { r: 201, g: 32, b: 43 }, advertiseQemuExtKey = false, maxUpdates = 6, rejectAuth = false,
+    color = { r: 201, g: 32, b: 43 }, pattern = null, advertiseQemuExtKey = false, maxUpdates = 6, rejectAuth = false,
   } = {}) {
+    this.pattern = pattern;
     this.rejectAuth = rejectAuth;
     this.width = width;
     this.height = height;
@@ -160,6 +163,17 @@ export class FakeVncServer {
     return true;
   }
 
+  /** Solid colour, or four known quadrants so pixel order can be checked visually. */
+  pixelAt(x, y) {
+    if (this.pattern !== 'quadrants') return this.color;
+    const right = x >= this.width / 2;
+    const bottom = y >= this.height / 2;
+    if (!bottom && !right) return { r: 255, g: 0, b: 0 };     // top-left red
+    if (!bottom && right) return { r: 0, g: 255, b: 0 };      // top-right green
+    if (bottom && !right) return { r: 0, g: 0, b: 255 };      // bottom-left blue
+    return { r: 255, g: 255, b: 255 };                        // bottom-right white
+  }
+
   async sendUpdate(write, incremental, force = false) {
     if (!force && this.updateCount >= this.maxUpdates) return;
     if (!force && incremental && this.updateCount >= 2) return;
@@ -173,10 +187,14 @@ export class FakeVncServer {
       rects.push(pseudo);
     }
     const raw = Buffer.alloc(this.width * this.height * 4);
-    for (let offset = 0; offset < raw.length; offset += 4) {
-      raw[offset] = this.color.b;
-      raw[offset + 1] = this.color.g;
-      raw[offset + 2] = this.color.r;
+    for (let y = 0; y < this.height; y++) {
+      for (let x = 0; x < this.width; x++) {
+        const offset = (y * this.width + x) * 4;
+        const pixel = this.pixelAt(x, y);
+        raw[offset] = pixel.r;        // wire order is R,G,B,X (red-shift 0)
+        raw[offset + 1] = pixel.g;
+        raw[offset + 2] = pixel.b;
+      }
     }
     const header = Buffer.alloc(12);
     header.writeUInt16BE(this.width, 4);

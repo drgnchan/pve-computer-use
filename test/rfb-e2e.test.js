@@ -125,6 +125,31 @@ test('plain KeyEvent path works when the server does not advertise QEMU extensio
   });
 });
 
+test('decoded framebuffer pixels keep the guest colour order', { skip, timeout: 180_000 }, async t => {
+  // The fake server paints four known quadrants; reading them back from the
+  // decoded canvas proves the wire byte order matches QEMU (R,G,B,X for a
+  // little-endian 32bpp format). A red/blue swap would fail here.
+  await withSession(t, { width: 64, height: 48, pattern: 'quadrants' }, async session => {
+    const pixels = await session.page.evaluate(() => {
+      const image = window.__rfb.getImageData();
+      const at = (x, y) => {
+        const index = (y * image.width + x) * 4;
+        return [image.data[index], image.data[index + 1], image.data[index + 2]];
+      };
+      return {
+        topLeft: at(4, 4),
+        topRight: at(image.width - 5, 4),
+        bottomLeft: at(4, image.height - 5),
+        bottomRight: at(image.width - 5, image.height - 5),
+      };
+    });
+    assert.deepEqual(pixels.topLeft, [255, 0, 0], 'top-left must stay red');
+    assert.deepEqual(pixels.topRight, [0, 255, 0], 'top-right must stay green');
+    assert.deepEqual(pixels.bottomLeft, [0, 0, 255], 'bottom-left must stay blue');
+    assert.deepEqual(pixels.bottomRight, [255, 255, 255], 'bottom-right must stay white');
+  });
+});
+
 test('waitForChange returns on a server push and times out on a static screen', { skip, timeout: 180_000 }, async t => {
   await withSession(t, { width: 64, height: 48, maxUpdates: 2 }, async (session, vnc) => {
     const settled = await session.evaluate('consoleState');

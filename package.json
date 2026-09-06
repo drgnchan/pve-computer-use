@@ -14,7 +14,8 @@
     "smoke": "node scripts/smoke-browser.mjs",
     "install-skill": "node scripts/install-skill.mjs",
     "install-skill:global": "node scripts/install-skill.mjs --global",
-    "debug:rfb": "node scripts/debug-rfb.mjs"
+    "debug:rfb": "node scripts/debug-rfb.mjs",
+    "mock-console": "node scripts/mock-console.mjs"
   },
   "engines": {
     "node": ">=20"
