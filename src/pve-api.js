@@ -87,11 +87,11 @@ export class PveApi {
     }
     const proxy = await this.request('POST', `${base}/vncproxy`, { websocket: '1' });
     if (!proxy?.ticket || !proxy?.port) throw new Error('PVE did not return a usable console ticket');
-    if (!proxy.password) throw new Error('PVE did not return the RFB console password; check the PVE version');
+    const { password } = splitVncTicket(proxy.ticket, proxy.password);
     const url = new URL(`/api2/json${base}/vncwebsocket`, this.config.endpoint);
     url.protocol = 'wss:';
     url.search = new URLSearchParams({ port: String(proxy.port), vncticket: proxy.ticket }).toString();
-    return { upstreamUrl: url.href, password: proxy.password, headers: this.headers, tlsOptions: this.tlsOptions(), vmName: status.name || null };
+    return { upstreamUrl: url.href, password, headers: this.headers, tlsOptions: this.tlsOptions(), vmName: status.name || null };
   }
 
   /** Reads the served certificate so its digest can be pinned (no verification, no auth). */
@@ -123,6 +123,25 @@ export class PveApi {
       socket.on('error', error => reject(new Error(`Cannot reach ${this.config.endpoint} (${error.code || error.message})`)));
     });
   }
+}
+
+/**
+ * Extracts the RFB password from a vncproxy response.
+ *
+ * Newer PVE returns an explicit `password` field. Older versions only prefix it
+ * to the ticket ("<8 printable chars>:PVEVNC:..."), which is also the form
+ * PVE::AccessControl::verify_vnc_ticket strips server side, so the complete
+ * ticket must still be sent as the vncticket query parameter.
+ */
+export function splitVncTicket(ticket, explicitPassword) {
+  if (typeof explicitPassword === 'string' && explicitPassword.length > 0) {
+    return { password: explicitPassword, vncticket: ticket };
+  }
+  const match = /^([\x21-\x60]{8}):(PVEVNC:.*)$/.exec(String(ticket || ''));
+  if (match) return { password: match[1], vncticket: ticket };
+  throw new Error(
+    'PVE returned no RFB console password: neither a password field nor the "<8 chars>:PVEVNC:" ticket prefix; check the PVE version'
+  );
 }
 
 function describeTlsError(error, config) {

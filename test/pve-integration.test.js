@@ -232,6 +232,33 @@ test('doctor flags a missing secret and an unpinned certificate', { skip: !hasOp
   assert.equal(pve.records.statusRequests, 0);
 });
 
+test('older PVE without the vncproxy password field still opens a console', { skip, timeout: 300_000 }, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pve-cu-oldpve-'));
+  const pve = new FakePve({ ...selfSignedCert(dir), omitVncPasswordField: true });
+  const endpoint = await pve.listen();
+  const { fingerprint } = await new PveApi({ endpoint, node: 'lab', vmid: 105, tlsOptions: {} }).peerFingerprint();
+  const configFile = path.join(dir, 'config.json');
+  fs.writeFileSync(configFile, JSON.stringify({
+    executablePath: CHROME,
+    targets: { lab: { endpoint, node: 'lab', vmid: 105, cacheDir: dir, tlsFingerprint: fingerprint, auth: { tokenId: 'pve-cu@pve!console', tokenSecretEnv: 'PVE_CU_FAKE_TOKEN' } } },
+  }));
+  const env = { PVE_CU_CONFIG: configFile, PVE_CU_FAKE_TOKEN: FAKE_TOKEN_SECRET };
+  t.after(async () => { await run(['--target', 'lab', 'daemon', 'stop'], env); await pve.close(); });
+
+  const observeResult = await run(['--target', 'lab', 'observe'], env);
+  const observe = json(observeResult);
+  assert.equal(observe?.width, 160, `observe failed: ${observeResult.stderr || observeResult.stdout}`);
+  assert.equal(observe.height, 100);
+
+  // The RFB password must be the 8 character ticket prefix, so the VNC auth
+  // handshake succeeds and input reaches the guest.
+  assert.equal(pve.vnc.events.authResponse?.length, 16);
+  await run(['--target', 'lab', 'click', '--x', '0.5', '--y', '0.5'], env);
+  assert.deepEqual(pve.vnc.events.pointerEvents.slice(-2), [
+    { mask: 1, x: 80, y: 50 }, { mask: 0, x: 80, y: 50 },
+  ]);
+});
+
 test('a stopped VM is reported instead of opening a console', { skip, timeout: 200_000 }, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pve-cu-stopped-'));
   const pve = new FakePve({ ...selfSignedCert(dir), running: false });

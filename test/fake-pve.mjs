@@ -22,7 +22,8 @@ function formBody(raw) {
  *   - vncwebsocket requires API auth *and* a matching vncticket/port
  */
 export class FakePve {
-  constructor({ cert, key, node = 'lab', vmid = 105, vmName = 'fake-vm', running = true, width = 160, height = 100, advertiseQemuExtKey = true, pattern = null, color, rejectAuth = false }) {
+  constructor({ cert, key, node = 'lab', vmid = 105, vmName = 'fake-vm', running = true, width = 160, height = 100, advertiseQemuExtKey = true, pattern = null, color, rejectAuth = false, omitVncPasswordField = false }) {
+    this.omitVncPasswordField = omitVncPasswordField;
     this.node = node;
     this.vmid = vmid;
     this.vmName = vmName;
@@ -114,12 +115,17 @@ export class FakePve {
       // Ticket auth needs the CSRF header; API tokens are exempt (as in PVE).
       if (auth === 'ticket' && req.headers.csrfpreventiontoken !== this.csrf) return this.deny(res);
       if (body.websocket !== '1') return this.json(res, 400, null);
-      this.vncPassword = Array.from(crypto.randomBytes(8), byte => String.fromCharCode(33 + (byte % 94))).join('');
+      // PVE::Ticket::generate_vnc_password uses 8 bytes in '!' (33) .. '`' (96).
+      this.vncPassword = Array.from(crypto.randomBytes(8), byte => String.fromCharCode(33 + (byte % 64))).join('');
       this.vncTicket = `${this.vncPassword}:PVEVNC:${FAKE_USERNAME}:/vms/${this.vmid}:${crypto.randomBytes(8).toString('hex').toUpperCase()}`;
-      return this.json(res, 200, {
-        user: FAKE_USERNAME, ticket: this.vncTicket, password: this.vncPassword,
+      const result = {
+        user: FAKE_USERNAME, ticket: this.vncTicket,
         cert: '', port: this.vncPort, upid: `UPID:${this.node}:0000:00000000:00000000:vncproxy:${this.vmid}:${FAKE_USERNAME}:`,
-      });
+      };
+      // Older PVE versions omit the field; the password then only exists as the
+      // ticket prefix, exactly like the real server behaves.
+      if (!this.omitVncPasswordField) result.password = this.vncPassword;
+      return this.json(res, 200, result);
     }
 
     return this.json(res, 501, null);
