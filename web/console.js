@@ -321,7 +321,13 @@ export async function releaseAll({ delayMs = 15 } = {}) {
   }
   state.held = [];
   if (state.mask) {
-    try { target._sendMouse(0, 0, 0); } catch {}
+    // Release at the last known position: _sendMouse(0, 0, 0) would teleport
+    // the guest pointer to the top-left corner of the framebuffer.
+    const last = state.lastPointer;
+    const position = last && Number.isFinite(last.x) && Number.isFinite(last.y)
+      ? last
+      : (Number.isFinite(target._mousePos?.x) ? target._mousePos : { x: 0, y: 0 });
+    try { target._sendMouse(position.x, position.y, 0); } catch {}
     state.mask = 0;
   }
   return { executed: 'reset', releasedKeys: released, framebufferUpdates: state.updates };

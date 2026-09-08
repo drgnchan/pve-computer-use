@@ -206,3 +206,28 @@ test('a rejected RFB authentication surfaces as a console failure', { skip, time
   await assert.rejects(() => session.start(), /security failure|Console connection failed/);
   assert.equal(vnc.events.authResponse?.length, 16, 'the client must still answer the challenge');
 });
+
+test('releaseAll releases a held button at the last pointer position', { skip, timeout: 180_000 }, async t => {
+  await withSession(t, { width: 120, height: 80 }, async (session, vnc) => {
+    // Interrupt a click after the press so a button stays held.
+    await session.page.evaluate(() => {
+      const rfb = window.__rfb;
+      const original = rfb._handleMouseButton.bind(rfb);
+      let calls = 0;
+      rfb._handleMouseButton = (x, y, mask) => {
+        calls += 1;
+        if (calls === 2) throw new Error('simulated interruption');
+        return original(x, y, mask);
+      };
+      window.__restoreHandleMouseButton = () => { rfb._handleMouseButton = original; };
+    });
+    await assert.rejects(() => session.evaluate('mouse', { type: 'click', x: 40, y: 30, button: 'left' }));
+    await session.page.evaluate(() => window.__restoreHandleMouseButton());
+
+    const before = vnc.events.pointerEvents.length;
+    const released = await session.evaluate('releaseAll', {});
+    assert.equal(released.executed, 'reset');
+    assert.deepEqual(vnc.events.pointerEvents.slice(before).at(-1), { mask: 0, x: 40, y: 30 },
+      'the release must not teleport the guest pointer to the top-left corner');
+  });
+});

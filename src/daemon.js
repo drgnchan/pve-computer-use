@@ -82,6 +82,9 @@ export class PveDaemon {
         log('opening console session...');
         await session.start();
         this.session = session;
+        // A new session restarts the framebuffer counter at zero, so a baseline
+        // from the previous session must never be reused by --wait-change.
+        this.actionBaseline = null;
         log(`console connected: ${session.framebuffer.width}x${session.framebuffer.height} updates=${(await session.state()).framebufferUpdates}`);
         return session;
       })().catch(error => { this.sessionPromise = null; throw error; });

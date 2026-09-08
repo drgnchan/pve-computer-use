@@ -186,6 +186,30 @@ test('observe --wait-change waits against the frame counter of the last input ac
   assert.deepEqual(sessions[0].calls.filter(call => call.fn === 'waitForChange').at(-1).arg, { baseline: 6, timeoutMs: 5000 });
 });
 
+test('a released or replaced session does not leak the old --wait-change baseline', async t => {
+  const { sessions, socketPath } = await startDaemon(t, { idleTimeoutMs: 40, idleCheckIntervalMs: 15 });
+
+  // Baseline 5 is recorded against the first session...
+  await send(socketPath, { action: 'click', params: { x: 0.5, y: 0.5 } });
+  await new Promise(resolve => setTimeout(resolve, 250));
+  assert.equal(sessions[0].closed, true, 'the idle session must be released');
+
+  // ...and the replacement session starts counting from zero again.
+  await send(socketPath, { action: 'status' });
+  assert.equal(sessions.length, 2);
+  sessions[1].updates = 2;
+  await send(socketPath, { action: 'observe', params: { 'wait-change': true, 'wait-timeout': 500 } });
+  assert.deepEqual(sessions[1].calls.find(call => call.fn === 'waitForChange').arg,
+    { baseline: 2, timeoutMs: 500 }, 'a fresh session must not wait for the previous frame counter');
+
+  // reconnect replaces the session the same way.
+  await send(socketPath, { action: 'reconnect' });
+  sessions[2].updates = 3;
+  await send(socketPath, { action: 'observe', params: { 'wait-change': true } });
+  assert.deepEqual(sessions[2].calls.find(call => call.fn === 'waitForChange').arg,
+    { baseline: 3, timeoutMs: 5000 });
+});
+
 test('input plus stable observation returns a frame without repeating input', async t => {
   const { sessions, socketPath } = await startDaemon(t);
   const r = await send(socketPath, { action: 'click', params: {
