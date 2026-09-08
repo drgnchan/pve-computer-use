@@ -85,6 +85,10 @@ export class ConsoleSession {
 
     if (this.pageErrors.length > 40) this.pageErrors = this.pageErrors.slice(-20);
     await this.page.goto(this.bridge.pageUrl, { waitUntil: 'load', timeout: 20_000 });
+    // The adapter is a deferred module script; on a slow or loaded machine the
+    // `load` event can fire before it has executed, so wait for the API first.
+    await this.page.waitForFunction(() => Boolean(window.pveConsole), null, { timeout: 20_000 })
+      .catch(() => { throw new Error('The console adapter page did not initialise; run `npm run build` in the pve-computer-use directory'); });
     await this.page.evaluate(
       ({ url, password }) => window.pveConsole.startConsole({ url, password }),
       { url: this.bridge.rfbUrl, password: resolved.password }

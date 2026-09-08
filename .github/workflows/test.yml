@@ -7,13 +7,16 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run build
       - run: npm run check
-      - run: npm test
+      # Serial + force-exit: the browser/RFB tests each launch a headless
+      # Chromium, and the runner must not wait on daemon child processes.
+      - run: npm run test:ci
