@@ -21,6 +21,30 @@ description: Control and inspect a virtual machine on Proxmox VE through its VNC
 
 先确认 target：`pve-cu targets`。每个 target 固定绑定一台 VM（endpoint + node + vmid），不要试图"切换当前虚拟机"。
 
+## Pi 原生工具（优先）
+
+若已加载 `pve_console`，优先用它：一次工具调用执行**一个动作**并直接返回最新截图附件，
+不必再用 `read` 打开路径。先 `{target:"windows-vm", action:"observe"}` 看图；之后例如：
+
+```json
+{"target":"windows-vm","action":"double-click","x":37,"y":237,"wait":"stable","minWaitMs":2500,"waitTimeoutMs":10000}
+```
+
+密码仍只通过 `fromFile`（绝对路径或 `~/...`）交给 pve-cu，不读出内容、不用 `text`。
+TOTP 仍只走专用 MCP，工具报成功不等于认证成功，必须看目标屏幕。
+不要并行发同一目标的操作。所有敏感操作确认规则仍适用。
+
+- 输入动作默认等待稳定画面（至少 1500ms，连续 800ms 无重绘，最多 5000ms）；启动类建议 `minWaitMs:2500`。
+- `stable:true` **只表示重绘暂歇，不代表窗口已打开或焦点已就绪**，必须看图确认。
+- 光标闪烁、时钟等可能导致 `stable:false/timedOut:true`；直接看最终截图，不要因此重发操作。
+- `observationError` / `imageError` 表示动作后观察失败，**不能据此重试动作**；重新 observe。
+- 传输超时/取消也不撤销已发送动作；先观察，禁止自动重试输入。
+- `timings`、`cliMs`、`toolTotalMs` 帮助区分输入、观察和 CLI 耗时；不包含下一轮模型推理耗时。
+
+未加载原生工具时 CLI 可合并动作与截图：
+`pve-cu --target windows-vm click --x 0.5 --y 0.5 --observe --wait-stable`，随后 `read` 返回的 `frame.filePath`。
+单独观察可用 `observe --wait-stable --stable-ms 800 --min-wait 1500 --wait-timeout 5000`。
+
 ## CLI Reference
 
 ### 1. Status
@@ -164,6 +188,12 @@ BIOS/UEFI 未点亮显示、客户机关闭了显示器、控制台刚重连还�
 客户机切换分辨率（进桌面、退出全屏、RDP 断开）后 framebuffer 尺寸变化，
 之前的像素坐标失效。**分辨率变化后必须重新截图并重新计算坐标**（优先用归一化坐标）。
 
+### E0. 密码正确也可能因焦点/界面时序导致登录失败
+密码输入前显式点击密码框并观察确认焦点；不要仅凭蓝色下划线认为输入已就绪。
+凭据界面可能超时回锁屏，上一张截图不能长期代表当前焦点。
+若同一密码文件显式聚焦后登录成功，不能把先前失败归因于文件内容错误。
+出现错误时先检查输入状态并停止连续重试，避免锁定账户。
+
 ### E. 登录界面密码框不回显
 向 Windows 登录界面注入密码后，截图里密码框可能仍是空的。
 不要据此判断失败：等几秒后看画面是否进入桌面（成功）或出现"密码错误"（失败）。
@@ -204,7 +234,7 @@ Windows 在标准 VGA 上是软件光标，**光标位置的重绘可能滞后�
 
 ### K. 点击后立刻打字会丢键（实测踩坑）
 点击会打开**带动画的控件**（开始菜单/搜索面板/下拉）时，焦点在动画期间未就绪，紧跟的 `type` 会整段丢失。
-正确做法：点击后 `sleep 1~2`（或先截图确认焦点/光标已在输入框）再打字；丢键的典型症状是
+正确做法：点击后用稳定等待并截图确认焦点/光标已在输入框再打字；丢键的典型症状是
 面板打开了但框里是空的。
 
 ### L. 双击/启动类动作的首帧往往太早（实测踩坑）

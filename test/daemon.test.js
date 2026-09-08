@@ -186,6 +186,35 @@ test('observe --wait-change waits against the frame counter of the last input ac
   assert.deepEqual(sessions[0].calls.filter(call => call.fn === 'waitForChange').at(-1).arg, { baseline: 6, timeoutMs: 5000 });
 });
 
+test('input plus stable observation returns a frame without repeating input', async t => {
+  const { sessions, socketPath } = await startDaemon(t);
+  const r = await send(socketPath, { action: 'click', params: {
+    x: 0.5, y: 0.5, observe: true, 'wait-stable': true, 'min-wait': 2000,
+  } });
+  assert.equal(r.ok, true);
+  assert.ok(fs.existsSync(r.data.frame.filePath));
+  assert.ok(r.data.timings.totalMs >= 0);
+  assert.equal(sessions[0].calls.filter(c => c.fn === 'mouse').length, 1);
+  assert.deepEqual(sessions[0].calls.find(c => c.fn === 'waitForStable').arg,
+    { baseline: 5, timeoutMs: 5000, stableMs: 800, minWaitMs: 2000 });
+});
+
+test('observation failure preserves successful input and invalid waits send no input', async t => {
+  const { sessions, socketPath } = await startDaemon(t);
+  const bad = await send(socketPath, { action: 'click', params: {
+    x: 0.5, y: 0.5, observe: true, 'wait-timeout': 'oops',
+  } });
+  assert.equal(bad.ok, false);
+  assert.equal(sessions.length, 0);
+  await send(socketPath, { action: 'status' });
+  sessions[0].capture = async () => { throw new Error('capture failed'); };
+  const r = await send(socketPath, { action: 'key', params: { keys: 'Enter', observe: true } });
+  assert.equal(r.ok, true);
+  assert.equal(r.data.executed, 'keyCombo');
+  assert.equal(r.data.observationError, 'capture failed');
+  assert.equal(sessions[0].calls.filter(c => c.fn === 'keyCombo').length, 1);
+});
+
 test('frames are pruned to the configured count', async t => {
   const { socketPath, dir } = await startDaemon(t, { frameKeep: 3 });
   const paths = [];

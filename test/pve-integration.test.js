@@ -88,8 +88,12 @@ test('the real CLI + daemon + PVE client drive a console end to end', { skip, ti
   assert.deepEqual(pve.records.vncproxyRequests[0].body, { websocket: '1' });
 
   // --- mouse -------------------------------------------------------------
-  const click = json(await cli(['lab', 'click', '--x', '0.5', '--y', '0.5']));
+  const click = json(await cli(['lab', 'click', '--x', '0.5', '--y', '0.5', '--observe', '--wait-stable', '--stable-ms', '100', '--min-wait', '200']));
   assert.equal(click.executed, 'click');
+  assert.equal(click.frame.stable, true);
+  assert.ok(click.frame.waitedMs >= 200);
+  assert.ok(fs.existsSync(click.frame.filePath));
+  assert.ok(click.timings.observationMs >= 200);
   assert.deepEqual(pve.vnc.events.pointerEvents.slice(-2), [
     { mask: 1, x: 80, y: 50 }, { mask: 0, x: 80, y: 50 },
   ]);

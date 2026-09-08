@@ -81,6 +81,10 @@ Commands:
   observe --wait-change [--wait-timeout 5000]
                                            wait for the guest to redraw since the last
                                            input action, then capture (changed: true|false)
+  observe --wait-stable [--stable-ms 800] [--min-wait 1500] [--wait-timeout 5000]
+                                           bounded redraw-quiescence heuristic; inspect the frame
+  Input actions also accept --observe plus the above waiting options.
+  Returns frame.filePath, timings, or observationError (do NOT repeat the action).
   click --x <x> --y <y> [--button left|right|middle] [--space 1000]
   double-click --x <x> --y <y> [--button ...]
   move --x <x> --y <y>
@@ -183,7 +187,7 @@ async function main() {
   }
   try {
     await ensureDaemon(config);
-    const response = await send(config.socketPath, { action, params: options }, TIMEOUTS[action] || TIMEOUTS.default);
+    const response = await send(config.socketPath, { action, params: options }, options.observe ? 300_000 : (TIMEOUTS[action] || TIMEOUTS.default));
     if (!response.ok) return fail(response.error || 'Daemon rejected the request');
     console.log(JSON.stringify(response.data, null, 2));
   } catch (error) {

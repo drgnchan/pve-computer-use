@@ -203,6 +203,40 @@ pve-cu --target windows-vm doctor --console  # 额外开真实控制台并截一
 
 ---
 
+## Pi 原生工具与稳定等待
+
+`extensions/pve-console.ts` 注册 `pve_console`，动作与截图在一次工具调用返回，省去
+“拿路径 → 再调 read”的模型往返。工具不在启动时连接 VM；不自动重试输入。
+安装到 Pi 的全局 extensions 后 `/reload` 生效。例如：
+
+```json
+{"target":"windows-vm","action":"observe"}
+{"target":"windows-vm","action":"double-click","x":37,"y":237,"wait":"stable","minWaitMs":2500,"waitTimeoutMs":10000}
+{"target":"windows-vm","action":"type","fromFile":"~/.pi/agent/secrets/windows-vm-password"}
+```
+
+`text` 只用于非秘密 ASCII；密码通过路径交给 CLI，扩展不读取密码内容。
+TOTP 继续使用专用 MCP。每次操作后仍必须检查返回的截图，不可并行操作同一目标。
+
+CLI 同样支持：
+
+```bash
+pve-cu --target windows-vm observe --wait-stable --stable-ms 800 --min-wait 1500 --wait-timeout 5000
+pve-cu --target windows-vm click --x 0.5 --y 0.5 --observe --wait-stable
+```
+
+`--wait-stable` 等待连续无重绘窗口，且至少观察 `--min-wait` 指定时间，最多等到超时。
+这只是重绘静止启发式，**不等于焦点或应用就绪**；闪烁光标可能一直重绘，超时仍返回截图，
+标注 `stable:false/timedOut:true`。慢启动可能在静止后继续变化，仍需视觉确认。
+
+`--observe` 在同一个 daemon 队列任务里完成动作及截图，返回 `frame.filePath` 和
+`timings.actionMs/observationMs/totalMs`。观察失败保留动作成功结果并返回 `observationError`，
+不得因截图失败重发输入。Pi 工具附加 `cliMs/toolTotalMs`，便于分离本地执行和模型轮次耗时。
+超时/取消不撤销 daemon 已收到的动作，必须先 observe 再决定下一步。
+
+升级：先 `npm run build`，再在无输入进行时 `pve-cu --target windows-vm daemon stop`，
+下次调用启动新 daemon（不会退出 VPN）；Pi `/reload` 加载扩展与技能，MCP 服务也需重启/重载。
+
 ## 与 `onekvm-cu` 的关系
 
 | | onekvm-cu | pve-cu |
@@ -233,7 +267,7 @@ SECURELINK_TOTP_PVE_TARGET=windows-vm
 - 工具**无参数**，目标机器由环境固定，模型无法临时改投别的 VM。
 - 发送前先向该 target 的 Daemon 要 `status`，必须同时满足
   `target`/`node`/`vmid` 与配置一致且 `connected: true`，否则拒绝输入。
-- Daemon 必须已在运行（`pve-cu --target <name> status`）；MCP 不会自己拉起它。
+- Daemon socket 不存在时 MCP 会通过固定 target 的 pve-cu CLI 自动拉起；输入前仍检查身份及连接。
 - 返回值里带 `channel`（backend/target/node/vmid），便于核对验证码去了哪台机器。
 - 不设 `SECURELINK_TOTP_BACKEND` 时行为完全不变，仍走 One-KVM 硬件。
 

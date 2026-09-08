@@ -2,6 +2,7 @@
 // screenshot + input primitives to the daemon through Playwright evaluate().
 import * as RFBModule from '@novnc/novnc';
 import { SHIFT, MOUSE_MASK } from '../src/keys.js';
+import { waitForStable as waitStable } from './wait-stable.js';
 
 // @novnc/novnc >= 1.7 is ESM; tolerate one extra wrapper level from CJS interop.
 function resolveRFB(module) {
@@ -214,6 +215,10 @@ export async function waitForChange({ baseline = 0, timeoutMs = 5000, pollMs = 8
   return { changed: false, waitedMs: Date.now() - started, baselineUpdates: from, framebufferUpdates: state.updates };
 }
 
+export async function waitForStable(options = {}) {
+  return waitStable({ ...options, readState: report, assertConnected });
+}
+
 export async function captureFrame({ format = 'png', jpegQuality = 0.9 } = {}) {
   const target = assertConnected();
   if (!state.updates) throw new Error('No framebuffer update received yet');
@@ -328,6 +333,6 @@ export function disconnectConsole() {
 }
 
 window.pveConsole = {
-  startConsole, waitConnected, consoleState, waitForChange, ensureFullFrame, captureFrame, mouse,
+  startConsole, waitConnected, consoleState, waitForChange, waitForStable, ensureFullFrame, captureFrame, mouse,
   typeChars, keyCombo, releaseAll, disconnectConsole,
 };

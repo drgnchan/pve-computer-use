@@ -113,6 +113,27 @@ export class PveDaemon {
   }
 
   async dispatch(request) {
+    const started = Date.now();
+    const params = request?.params || {};
+    const captureAfter = Boolean(params.observe);
+    const inputs = ['click', 'double_click', 'double-click', 'move', 'drag', 'scroll', 'type', 'key', 'keypress', 'reset'];
+    if (captureAfter && !inputs.includes(request?.action)) throw new Error('--observe is only supported on input actions');
+    const options = captureOptions(params); // Reject invalid waiting options before any input.
+    const response = await this.dispatchAction(request);
+    const actionMs = Date.now() - started;
+    if (captureAfter && response.ok) {
+      try {
+        response.data.frame = await this.capture(options);
+      } catch (error) {
+        // Input already happened. Never report this as a failed/retryable action.
+        response.data.observationError = error?.message || String(error);
+      }
+      response.data.timings = { actionMs, observationMs: Date.now() - started - actionMs, totalMs: Date.now() - started };
+    }
+    return response;
+  }
+
+  async dispatchAction(request) {
     const action = request?.action;
     const params = request?.params || {};
     // A ping only proves the daemon is alive; it must not keep a session pinned.
@@ -143,10 +164,7 @@ export class PveDaemon {
       case 'screenshot':
         return {
           ok: true,
-          data: await this.capture({
-            waitChange: Boolean(params['wait-change'] ?? params.waitChange),
-            waitTimeoutMs: Number(params['wait-timeout'] ?? params.waitTimeout ?? 5_000),
-          }),
+          data: await this.capture(captureOptions(params)),
         };
 
       case 'click':
@@ -241,17 +259,20 @@ export class PveDaemon {
     return data;
   }
 
-  async capture({ waitChange = false, waitTimeoutMs = 5_000 } = {}) {
+  async capture({ waitChange = false, waitStable = false, waitTimeoutMs = 5_000, stableMs = 800, minWaitMs = 1500 } = {}) {
+    const started = Date.now();
     const session = await this.ensureSession();
 
     // Wait for the guest to actually redraw instead of sleeping a fixed time.
     let change = null;
-    if (waitChange) {
+    if (waitChange || waitStable) {
       const baseline = Number.isFinite(this.actionBaseline)
         ? this.actionBaseline
         : (await session.evaluate('consoleState')).framebufferUpdates ?? 0;
       const timeoutMs = Math.max(0, Math.min(120_000, Number(waitTimeoutMs) || 0));
-      change = await session.evaluate('waitForChange', { baseline, timeoutMs });
+      change = await session.evaluate(waitStable ? 'waitForStable' : 'waitForChange', {
+        baseline, timeoutMs, ...(waitStable ? { stableMs, minWaitMs } : {}),
+      });
       if (Number.isFinite(change?.framebufferUpdates)) this.actionBaseline = change.framebufferUpdates;
     }
 
@@ -262,7 +283,7 @@ export class PveDaemon {
     fs.writeFileSync(filePath, Buffer.from(frame.image, 'base64'), { mode: 0o600 });
     this.latestFrame = { frameId, filePath, width: frame.width, height: frame.height, capturedAt: new Date().toISOString() };
     this.pruneFrames();
-    return { ...this.latestFrame, ...(change || {}), fullFrame: frame.fullFrame ?? null, framebufferUpdates: frame.framebufferUpdates, lastUpdateAt: frame.lastUpdateAt, target: this.config.target };
+    return { ...this.latestFrame, ...(change || {}), fullFrame: frame.fullFrame ?? null, framebufferUpdates: frame.framebufferUpdates, lastUpdateAt: frame.lastUpdateAt, target: this.config.target, captureTotalMs: Date.now() - started };
   }
 
   pruneFrames() {
@@ -284,6 +305,23 @@ export class PveDaemon {
     try { fs.unlinkSync(this.config.socketPath); } catch {}
     process.exit(0);
   }
+}
+
+function captureOptions(params) {
+  const duration = (value, fallback) => {
+    const n = value === undefined ? fallback : Number(value);
+    if (!Number.isFinite(n) || n < 0 || n > 120_000 || typeof value === 'boolean') {
+      throw new Error('Wait durations must be numbers between 0 and 120000 ms');
+    }
+    return n;
+  };
+  return {
+    waitChange: Boolean(params['wait-change'] ?? params.waitChange),
+    waitStable: Boolean(params['wait-stable'] ?? params.waitStable),
+    waitTimeoutMs: duration(params['wait-timeout'] ?? params.waitTimeout, 5000),
+    stableMs: duration(params['stable-ms'], 800),
+    minWaitMs: duration(params['min-wait'], 1500),
+  };
 }
 
 function pick(params, keys) {
