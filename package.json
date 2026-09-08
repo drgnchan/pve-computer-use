@@ -4,6 +4,12 @@
   "private": true,
   "type": "module",
   "description": "Control a Proxmox VE VM console (screenshot + mouse/keyboard) from the command line",
+  "license": "MIT",
+  "author": "drgnchan",
+  "repository": { "type": "git", "url": "git+https://github.com/drgnchan/pve-computer-use.git" },
+  "bugs": { "url": "https://github.com/drgnchan/pve-computer-use/issues" },
+  "homepage": "https://github.com/drgnchan/pve-computer-use#readme",
+  "keywords": ["proxmox", "pve", "vnc", "novnc", "computer-use", "remote-control", "screenshot", "automation"],
   "bin": {
     "pve-cu": "./bin/pve-cu.js"
   },

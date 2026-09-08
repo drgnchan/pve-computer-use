@@ -1,68 +1,116 @@
-# PVE Computer Use (`pve-cu`)
+# pve-cu — PVE Computer Use
 
-用「截图 + 鼠标键盘」的方式控制 Proxmox VE 上的虚拟机控制台，可直接作为 Pi Skill 使用。
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org)
+[![Test](https://github.com/drgnchan/pve-computer-use/actions/workflows/test.yml/badge.svg)](https://github.com/drgnchan/pve-computer-use/actions/workflows/test.yml)
 
-不需要在虚拟机内安装任何 Agent：控制的是 PVE 提供的虚拟显示器与虚拟输入设备，因此 BIOS、系统安装界面、登录界面都能操作。
+Drive a Proxmox VE virtual machine through its VNC console: capture screenshots
+and inject mouse and keyboard input from the command line.
+
+No agent is required inside the guest. `pve-cu` talks to the virtual display and
+virtual input devices that PVE already exposes, so it can operate the BIOS, an
+installer, or a login screen just as well as a running desktop.
+
+It is designed to be driven by an AI agent in a *screenshot → plan → act → verify*
+loop, but the CLI is fully usable on its own.
+
+> Optional AI-agent integration (Pi): [docs/pi-integration.md](docs/pi-integration.md)
 
 ---
 
-## 架构
+## Features
+
+- **No guest agent.** Works below the OS: BIOS/UEFI, installers, boot menus, login screens.
+- **Screenshots + input.** Absolute pointer move, left/right/middle click, double-click, drag, wheel, text and key combos.
+- **Good Windows compatibility.** Keys are sent as QEMU extended key events with a DOM `code` (scancode), with a plain keysym fallback.
+- **Per-target daemon.** One Unix socket per VM, serialized action queue, frames written to disk with `0600`.
+- **Credentials stay in the daemon.** The PVE password/API token, the console ticket and TLS verification never reach the browser; it only gets a loopback URL and a short-lived RFB password.
+- **Real TLS pinning.** PVE's private cluster CA is pinned by leaf SHA-256, verified *before any request byte is written*.
+- **Redraw-aware waiting.** `--wait-change` / `--wait-stable` instead of blind sleeps.
+- **Secret-safe typing.** `type --from-file` / `--stdin` keeps passwords out of `argv` and process listings.
+- **Optional one-call agent tool.** `extensions/pve-console.ts` returns one action plus its screenshot in a single tool call.
+
+## Requirements
+
+- **Node.js >= 20**
+- **Chrome/Chromium** (default `/usr/bin/google-chrome`, configurable via `executablePath` / `PVE_CU_CHROME`)
+- **Proxmox VE** reachable over HTTPS on port 8006, and a user or API token with
+  `VM.Console` (to open the console) and `VM.Audit` (to read VM status).
+
+`playwright-core` is used as a library only; it does not download a browser.
+
+---
+
+## Quick start
+
+```bash
+git clone https://github.com/drgnchan/pve-computer-use.git
+cd pve-computer-use
+npm install
+npm run build                                  # bundles web/dist/console.bundle.js
+ln -s "$PWD/bin/pve-cu.js" ~/.local/bin/pve-cu # or: npm link
+
+cp config.example.json ~/.config/pve-cu/config.json
+# edit ~/.config/pve-cu/config.json for your PVE host and VM
+```
+
+Then run the setup checklist — it validates the config, build artefacts,
+Chromium, TLS pinning and the API endpoint **without sending credentials**:
+
+```bash
+pve-cu --target <name> fingerprint   # print the PVE certificate digest to pin
+pve-cu --target <name> doctor        # config / bundle / chromium / tls / api / credentials / daemon
+pve-cu --target <name> observe       # first screenshot
+```
+
+`doctor --auth` additionally logs in and reads the VM state, and
+`doctor --console` opens a real console and captures one frame.
+
+---
+
+## Architecture
 
 ```text
  ┌──────────────────────────────────────────────────────────────┐
- │                          Pi Agent                            │
- │      看图理解 → 规划动作 → 调用 CLI → 再截图验证              │
+ │                     Agent / CLI / Script                     │
+ │      inspect frame → plan → run CLI → capture again          │
  └───────────────┬──────────────────────────▲───────────────────┘
-      执行动作   │                          │ read 查看图片附件
+     action      │                          │ read the PNG/JPEG
                  ▼                          │
  ┌──────────────────────────────────────────────────────────────┐
  │                   pve-cu CLI / Daemon                        │
- │  每个 target 一个 Daemon：Unix Socket、动作串行队列、截图落盘  │
+ │  one daemon per target: Unix socket, serialized queue, frames │
  │  ┌────────────────┐   ┌───────────────────────────────────┐  │
- │  │ PVE REST API   │   │ 无头 Chromium + noVNC (RFB)       │  │
- │  │ 认证/控制台票据 │   │ 画面解码、鼠标键盘注入            │  │
+ │  │ PVE REST API   │   │ headless Chromium + noVNC (RFB)   │  │
+ │  │ auth + ticket  │   │ framebuffer + mouse/keyboard      │  │
  │  └───────┬────────┘   └───────────────┬───────────────────┘  │
  │          │        loopback bridge     │                      │
  │          └────────── ws://127.0.0.1 ──┘                      │
  └────────────────────────────┬─────────────────────────────────┘
-                              │ wss://pve:8006 (票据 + Cookie/Token)
+                              │ wss://pve:8006 (ticket + cookie/token)
                               ▼
-                    PVE → 目标虚拟机控制台
+                    PVE → target VM console
 ```
 
-1. Daemon 用 PVE API 认证，`POST .../qemu/{vmid}/vncproxy?websocket=1` 申请一次性控制台票据与 RFB 密码。
-2. Daemon 在 `127.0.0.1` 随机端口起一个 bridge：既托管 noVNC 页面，也把浏览器的 WebSocket 透明转发到 PVE。
-   **PVE 凭据、票据与 TLS 校验只存在于 Daemon 进程**；浏览器只拿到 bridge 地址和 8 字符 RFB 密码。
-3. 无头 Chromium 加载 noVNC（`@novnc/novnc` 1.7.0，ESM）建立 RFB 会话，维护 framebuffer。
-4. 截图取 noVNC 的完整 framebuffer（`RFB.toDataURL`），落盘为 PNG/JPEG，Agent 用 `read` 看图。
-5. 鼠标走 noVNC 的 pointer event（绝对坐标），键盘走 `RFB.sendKey(keysym, code, down)`；
-   QEMU 支持 extended key event，因此每个键都带 DOM `code`，Windows 客户机兼容性更好。
+1. The daemon authenticates to the PVE API and requests a one-shot console ticket
+   and RFB password via `POST .../qemu/{vmid}/vncproxy?websocket=1`.
+2. It starts a loopback bridge on a random `127.0.0.1` port that both serves the
+   noVNC adapter page and transparently proxies the browser WebSocket to PVE.
+   **PVE credentials, the ticket and TLS verification live only in the daemon
+   process**; the browser only receives the bridge URL and the 8-character RFB password.
+3. Headless Chromium loads noVNC (`@novnc/novnc` 1.7.0, ESM) and maintains the framebuffer.
+4. A screenshot is taken from noVNC's complete framebuffer (`RFB.toDataURL`) and
+   written to disk as PNG/JPEG.
+5. The mouse uses noVNC pointer events (absolute coordinates); the keyboard uses
+   `RFB.sendKey(keysym, code, down)`. QEMU advertises extended key events, so every
+   key carries a DOM `code` (scancode) for better Windows compatibility.
 
 ---
 
-## 安装
+## Configuration
 
-```bash
-cd ~/pve-computer-use
-npm install
-npm run build          # 生成 web/dist/console.bundle.js
-ln -s "$PWD/bin/pve-cu.js" ~/.local/bin/pve-cu
-npm test               # 23 个用例：单元 + 离线 RFB 端到端 + mock PVE 全链路
-npm run smoke          # 无头 Chrome + bundle + 适配器接线检查（不需要 PVE）
-npm run debug:rfb      # 单次连接 fake VNC server，打印握手/输入事件，排查用
-npm run mock-console   # 启动 mock PVE + 真 CLI 截一张四象限图，人工核对像素通道顺序
-```
-
-依赖：Node 20+、系统 Chrome/Chromium（默认 `/usr/bin/google-chrome`）。`playwright-core` 不下载浏览器。
-
-> noVNC 必须用 **1.7.x**：npm 上的 1.6.0 只发布 Babel 转译的 CJS（`lib/`），
-> 其 `util/browser.js` 含 top-level await，被 esbuild 打成 ESM 后会报 `exports is not defined`。
-
----
-
-## 配置
-
-配置文件：`~/.config/pve-cu/config.json`（或 `PVE_CU_CONFIG`），参考 `config.example.json`。
+Config file: `~/.config/pve-cu/config.json` (or `$PVE_CU_CONFIG`).
+See [`config.example.json`](config.example.json).
 
 ```json
 {
@@ -73,7 +121,7 @@ npm run mock-console   # 启动 mock PVE + 真 CLI 截一张四象限图，人�
       "node": "pve-node",
       "vmid": 105,
       "auth": { "tokenId": "pve-cu@pve!console", "tokenSecretEnv": "PVE_CU_TOKEN_WINDOWS_VM" },
-      "tlsFingerprint": "<64 位十六进制 SHA-256>",
+      "tlsFingerprint": "<64-char hex SHA-256>",
       "imageFormat": "png",
       "frameKeep": 20
     }
@@ -81,114 +129,150 @@ npm run mock-console   # 启动 mock PVE + 真 CLI 截一张四象限图，人�
 }
 ```
 
-| 字段 | 说明 |
+| Field | Description |
 |---|---|
-| `endpoint` | PVE Web/API 源，必须 `https://host:8006` 形式 |
-| `node` / `vmid` | 目标节点与虚拟机 ID |
-| `auth.tokenId` + `tokenSecretEnv` | **推荐**：API Token，密钥只放在环境变量里 |
-| `auth.username` + `passwordEnv` | 用户密码（不支持 MFA 登录） |
-| `tlsFingerprint` | PVE 证书 SHA-256，用 `fingerprint` 命令获取（推荐，见下） |
-| `caFile` | 或指定 CA PEM（如 `/etc/pve/pve-root-ca.pem`），走完整链校验 |
-| `insecureTls` | 显式关闭校验，Daemon 启动时打印警告 |
-| `imageFormat` / `jpegQuality` | `png`（默认，文字清晰）或 `jpeg` |
-| `cacheDir` / `socketPath` / `frameKeep` | 运行目录、Socket 路径、保留截图数 |
-| `idleTimeoutMs` | 空闲多久后释放控制台会话（票据 + 无头浏览器），默认 600000；`0` 表示不释放 |
-| `idleCheckIntervalMs` | 空闲检查间隔，默认按 `idleTimeoutMs/10`（5~60s） |
+| `endpoint` | PVE web/API origin; must be an `https://host:8006` origin |
+| `node` / `vmid` | Target node and VM ID |
+| `auth.tokenId` + `tokenSecretEnv` | **Recommended**: API token; the secret lives only in an environment variable |
+| `auth.username` + `passwordEnv` | User password login (MFA is not supported this way) |
+| `tlsFingerprint` | PVE leaf SHA-256, obtained with `fingerprint` (recommended) |
+| `caFile` | Alternative: a CA PEM (e.g. `/etc/pve/pve-root-ca.pem`) for full chain validation |
+| `insecureTls` | Explicitly disable verification; the daemon logs a warning on start |
+| `imageFormat` / `jpegQuality` | `png` (default, crisp text) or `jpeg` |
+| `cacheDir` / `socketPath` / `frameKeep` | Runtime directory, socket path, number of frames to keep |
+| `executablePath` | Chrome/Chromium binary (falls back to `$PVE_CU_CHROME`) |
+| `idleTimeoutMs` | Release the console session (ticket + headless browser) after this much inactivity; default `600000`, `0` disables |
+| `idleCheckIntervalMs` | Idle check interval; defaults to `idleTimeoutMs/10`, clamped to 5–60s |
 
-**PVE 侧准备**（专用账号，最小权限；在 PVE 主机上执行）：
+### PVE setup (least privilege)
 
-```bash
-pveum user add pve-cu@pve --comment "computer use"
-# PVEVMUser 角色包含 VM.Console（源码确认：VM.Console 属于 privgroups 的 VM/user 组）
-pveum acl modify /vms/105 --users pve-cu@pve --roles PVEVMUser
-# 注意：privsep 默认为 1，那样 token 不继承用户 ACL、权限为零，必须显式传 0
-pveum user token add pve-cu@pve console --privsep 0
-# 输出形如：full-tokenid  pve-cu@pve!console
-#            value        xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx   （只显示这一次）
-pveum user token permissions pve-cu@pve 'pve-cu@pve!console'   # 可选：确认权限
-```
-
-想更严可以把权限只给 token 而不给用户（`privsep` 保持默认的 1）：
+Create a dedicated user and API token, and grant it only what a console needs.
+On the PVE host:
 
 ```bash
-pveum user add pve-cu@pve --comment "computer use"        # 用户本身不给任何 ACL
-pveum user token add pve-cu@pve console                    # privsep=1
+# 1. dedicated user, no ACLs of its own
+pveum user add pve-cu@pve --comment "pve-cu computer use"
+
+# 2. API token with privilege separation (privsep=1, the default)
+pveum user token add pve-cu@pve console
+#   full-tokenid  pve-cu@pve!console
+#   value         xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx   (shown only once)
+
+# 3. grant the token VM.Console + VM.Audit on the target VM only
 pveum acl modify /vms/105 --tokens 'pve-cu@pve!console' --roles PVEVMUser
+
+# 4. optional: confirm the effective permissions
+pveum user token permissions pve-cu@pve 'pve-cu@pve!console'
 ```
 
-> 本工具需要 `VM.Console`（开控制台）和读取 VM 状态的权限（`VM.Audit`，包含在 PVEVMUser 里）。
-> 不需要也不应该给 `Sys.*`、`VM.Config.*`、`VM.Allocate` 等权限。
+> `PVEVMUser` includes `VM.Console` and `VM.Audit`. Do **not** grant `Sys.*`,
+> `VM.Config.*`, `VM.Allocate`, or any other privilege.
 
-然后导出密钥（写进 `~/.bashrc` 或 systemd 环境，**不要写进配置文件**）：
+If you prefer the token to inherit the user's ACLs instead, create it with
+`--privsep 0` and grant the role to the user:
+
+```bash
+pveum user token add pve-cu@pve console --privsep 0
+pveum acl modify /vms/105 --users pve-cu@pve --roles PVEVMUser
+```
+
+Then export the secret (in `~/.bashrc` or a systemd environment file — **never**
+in the config file):
 
 ```bash
 export PVE_CU_TOKEN_WINDOWS_VM='<token secret>'
-pve-cu --target windows-vm doctor --auth   # 验证登录、权限、节点名、VM 状态
+pve-cu --target windows-vm doctor --auth   # verify login, permissions, node, VM state
 ```
 
-### TLS 信任
+### TLS trust
 
-PVE 用自己的集群 CA（`pve-root-ca`）签发证书，且**握手时不下发该 CA**，所以系统信任库会直接拒绝。
-两种受支持的方式：
+PVE signs its certificate with a private cluster CA (`pve-root-ca`) and does
+**not** send that CA during the handshake, so the system trust store rejects it.
+Two supported options:
 
 ```bash
-# 方式一（推荐，无需登录 PVE）：固定 leaf 证书指纹
+# Option 1 (recommended, no PVE login needed): pin the leaf certificate digest
 pve-cu --target windows-vm fingerprint
-# 把输出的 fingerprint 填进 config.json 的 tlsFingerprint
-pve-cu --target windows-vm tlscheck      # 不发送任何凭据，验证可达性 + 证书固定
+# put the printed fingerprint into config.json as tlsFingerprint
+pve-cu --target windows-vm tlscheck      # reachability + pinning, sends no credentials
 
-# 方式二：拿到 PVE 根 CA 后走完整链校验
+# Option 2: fetch the PVE root CA and validate the full chain
 scp root@192.0.2.10:/etc/pve/pve-root-ca.pem ~/.config/pve-cu/pve-ca.pem
-# config.json 里改为 "caFile": "/home/user/.config/pve-cu/pve-ca.pem"
+# then set "caFile": "/home/user/.config/pve-cu/pve-ca.pem"
 ```
 
-指纹固定由自定义 `https.Agent` 实现：握手后校验 leaf 摘要**与请求地址（SAN）**，
-通过前所有写入被拦截，不通过就销毁 socket。
-> Node 在 `rejectUnauthorized:false` 时**不会**调用 `checkServerIdentity`，
-> 所以“关掉校验 + 自定义 checkServerIdentity”的写法是假固定；不要用。
+Pinning is implemented with a custom `https.Agent`: after the handshake it verifies
+the leaf digest **and the requested address (SAN)**, blocks every write until
+verification passes, and destroys the socket on mismatch.
 
-两个安全断言已写入测试：指纹不符时 **HTTPS 请求不会到达对端**，
-**bridge 的 `wss://` 上游也不会建连**（即 `vncticket`、Cookie 和 RFB 密码不可能泄露给冒充者）。
+> Node does **not** call `checkServerIdentity` when `rejectUnauthorized` is `false`,
+> so "disable verification + custom `checkServerIdentity`" is fake pinning. This
+> project does not use that approach.
+
+Two security properties are covered by tests: on a fingerprint mismatch the
+**HTTPS request never reaches the peer**, and the bridge's **`wss://` upstream is
+never opened** (so the `vncticket`, cookie and RFB password cannot leak to an impostor).
 
 ---
 
-## 命令
+## Commands
 
 ```bash
-pve-cu --target windows-vm status                    # 会话健康、分辨率、票据链路
-pve-cu --target windows-vm observe                   # 截图，输出 filePath / width / height
-pve-cu --target windows-vm observe --wait-change     # 等客户机重画后再截图（代替盲等 sleep）
+pve-cu --target windows-vm status                    # session health, framebuffer size, ticket chain
+pve-cu --target windows-vm observe                   # screenshot; prints filePath / width / height
+pve-cu --target windows-vm observe --wait-change     # wait for the guest to redraw, then capture
 pve-cu --target windows-vm observe --wait-change --wait-timeout 20000
 pve-cu --target windows-vm click --x 0.5 --y 0.5
 pve-cu --target windows-vm click --x 0.8 --y 0.2 --button right
 pve-cu --target windows-vm double-click --x 0.25 --y 0.35
 pve-cu --target windows-vm move --x 0.5 --y 0.5
 pve-cu --target windows-vm drag --from-x 0.2 --from-y 0.3 --to-x 0.7 --to-y 0.3
-pve-cu --target windows-vm scroll --x 0.5 --y 0.5 --dy 4      # dy>0 向下，dy<0 向上
+pve-cu --target windows-vm scroll --x 0.5 --y 0.5 --dy 4      # dy>0 scrolls down, dy<0 up
 pve-cu --target windows-vm type --text "https://example.com"
 pve-cu --target windows-vm key --keys "ctrl,l"
 pve-cu --target windows-vm key --keys "alt,f4"
-pve-cu --target windows-vm reset                     # 释放所有卡住的按键与鼠标
-pve-cu --target windows-vm reconnect                 # 重新申请票据并重连
+pve-cu --target windows-vm reset                     # release every held key and mouse button
+pve-cu --target windows-vm reconnect                 # request a fresh ticket and reconnect
 pve-cu --target windows-vm daemon stop
 pve-cu targets
-pve-cu --target windows-vm fingerprint   # 证书指纹（用于固定）
-pve-cu --target windows-vm tlscheck      # 可达性 + 证书固定校验，不发送凭据
-pve-cu --target windows-vm doctor        # 安装自检清单（不发凭据）
-pve-cu --target windows-vm doctor --auth     # 额外登录并读 VM 状态
-pve-cu --target windows-vm doctor --console  # 额外开真实控制台并截一帧
+pve-cu --target windows-vm fingerprint   # certificate digest to pin
+pve-cu --target windows-vm tlscheck      # reachability + pinning; sends no credentials
+pve-cu --target windows-vm doctor        # setup checklist (no credentials)
+pve-cu --target windows-vm doctor --auth     # additionally log in and read the VM state
+pve-cu --target windows-vm doctor --console  # additionally open a console and capture one frame
 ```
 
-坐标：`0.0~1.0` 归一化、当前 framebuffer 像素，或 `--x 500 --y 500 --space 1000` 自定义坐标空间。
-`--target` 也可以用环境变量 `PVE_CU_TARGET` 提供。
+**Coordinates** are `0.0..1.0` normalised, pixels of the current framebuffer, or
+any space with `--x 500 --y 500 --space 1000`. The target can also come from
+`$PVE_CU_TARGET`.
 
-参数解析：`--key value`、`--key=value`、`-t value` 均可。负数会被当成值（`--dy -2` 向上滚）；
-但以 `-` 开头的**文本**必须用 `=` 形式，例如 `pve-cu --target x type --text=-verbose`。
+**Argument parsing** accepts `--key value`, `--key=value` and `-t value`. Negative
+numbers are treated as values (`--dy -2` scrolls up); any *text* starting with `-`
+must use the `=` form, e.g. `pve-cu --target x type --text=-verbose`.
 
-`--wait-change` 的基线是**上一个输入动作完成时的 framebuffer 计数**，所以点击引发的重画会立刻返回；
-超时不是错误（静止画面本来不推送更新），此时 `changed: false`，截图仍然有效。
+**Secrets must never appear in `argv`.** Use a file or stdin:
 
-`observe` 输出：
+```bash
+pve-cu --target windows-vm type --from-file "$HOME/.config/pve-cu/windows-vm-password"
+cat secret.txt | pve-cu --target windows-vm type --stdin
+```
+
+### Waiting for the guest to redraw
+
+- `--wait-change` uses the framebuffer counter of the **last input action** as its
+  baseline, so a redraw caused by a click returns immediately. A timeout is not an
+  error (a static screen pushes no updates); the frame is still valid and `changed: false`.
+- `--wait-stable` waits for a bounded window of no redraws (default: at least
+  `--min-wait 1500`ms observed, `--stable-ms 800`ms quiet, `--wait-timeout 5000`ms).
+  It is a quiescence heuristic, **not** proof that a window is focused or ready;
+  a blinking caret can keep it from settling. The final frame is always returned,
+  with `stable:false` / `timedOut:true` in that case.
+- Input actions accept `--observe` to run the action and the capture in one
+  serialized daemon task, returning `frame` plus `timings.actionMs/observationMs/totalMs`.
+  If the capture fails, the action result is preserved and `observationError` is
+  added — **never retry the input because of a screenshot failure**.
+
+`observe` output:
 
 ```json
 {
@@ -203,98 +287,66 @@ pve-cu --target windows-vm doctor --console  # 额外开真实控制台并截一
 
 ---
 
-## Pi 原生工具与稳定等待
-
-`extensions/pve-console.ts` 注册 `pve_console`，动作与截图在一次工具调用返回，省去
-“拿路径 → 再调 read”的模型往返。工具不在启动时连接 VM；不自动重试输入。
-安装到 Pi 的全局 extensions 后 `/reload` 生效。例如：
-
-```json
-{"target":"windows-vm","action":"observe"}
-{"target":"windows-vm","action":"double-click","x":37,"y":237,"wait":"stable","minWaitMs":2500,"waitTimeoutMs":10000}
-{"target":"windows-vm","action":"type","fromFile":"~/.pi/agent/secrets/windows-vm-password"}
-```
-
-`text` 只用于非秘密 ASCII；密码通过路径交给 CLI，扩展不读取密码内容。
-TOTP 继续使用专用 MCP。每次操作后仍必须检查返回的截图，不可并行操作同一目标。
-
-CLI 同样支持：
+## Testing and development
 
 ```bash
-pve-cu --target windows-vm observe --wait-stable --stable-ms 800 --min-wait 1500 --wait-timeout 5000
-pve-cu --target windows-vm click --x 0.5 --y 0.5 --observe --wait-stable
+npm test             # unit + offline RFB end-to-end + mock-PVE integration
+npm run check        # syntax check of src/ and scripts/
+npm run build        # rebuild web/dist/console.bundle.js
+npm run smoke        # headless Chrome + bundle + adapter wiring (no PVE required)
+npm run debug:rfb    # connect to a fake VNC server and print the handshake/input events
+npm run mock-console # boot a mock PVE and capture a four-quadrant frame to eyeball pixel order
 ```
 
-`--wait-stable` 等待连续无重绘窗口，且至少观察 `--min-wait` 指定时间，最多等到超时。
-这只是重绘静止启发式，**不等于焦点或应用就绪**；闪烁光标可能一直重绘，超时仍返回截图，
-标注 `stable:false/timedOut:true`。慢启动可能在静止后继续变化，仍需视觉确认。
+Tests that need a browser or `openssl` are **skipped automatically** when the
+dependency is missing, so `npm test` is safe on a minimal machine. In CI, GitHub's
+`ubuntu-latest` image provides Google Chrome and `openssl`.
 
-`--observe` 在同一个 daemon 队列任务里完成动作及截图，返回 `frame.filePath` 和
-`timings.actionMs/observationMs/totalMs`。观察失败保留动作成功结果并返回 `observationError`，
-不得因截图失败重发输入。Pi 工具附加 `cliMs/toolTotalMs`，便于分离本地执行和模型轮次耗时。
-超时/取消不撤销 daemon 已收到的动作，必须先 observe 再决定下一步。
-
-升级：先 `npm run build`，再在无输入进行时 `pve-cu --target windows-vm daemon stop`，
-下次调用启动新 daemon（不会退出 VPN）；Pi `/reload` 加载扩展与技能，MCP 服务也需重启/重载。
+Validation against a real PVE host is recorded in [docs/validation.md](docs/validation.md).
 
 ---
 
-## 已知限制
+## Known limitations
 
-- **首次截图**需等待 RFB 握手和第一个 framebuffer update，`status`/`observe` 超时设为 120s。
-- **只能输入 ASCII**；中文需在客户机内用输入法（`type` 打拼音 + 数字/空格选词，靠截图确认候选）。
-- **同一控制台并发操作会互相干扰**：Agent 操作时不要同时打开 PVE 网页控制台。
-- noVNC 适配器使用了 `_handleMouseButton` / `_sendMouse` / `_framebufferUpdate` / `_display.flush` 等内部方法，
-  已锁定 `@novnc/novnc` 1.7.0，升级前必须重跑 `npm test`（离线 RFB 端到端用例会立刻发现协议/内部 API 变化）。
-- 客户机分辨率变化时 Daemon 会重设浏览器视口；极端情况下建议手动 `observe` 一次再继续。
-- **空闲释放**：超过 `idleTimeoutMs` 没有动作，Daemon 会先释放所有按键再关闭会话（票据 + 浏览器），
-  避免长期占用控制台、也方便你自己开 PVE 网页控制台。下一条命令会自动重连，因此**久未操作后的第一条命令会慢几秒**，这是正常现象。
-- 若 Chromium 因内核缺少 user namespace 而无法启用沙箱，Daemon 会退回 `--no-sandbox` 并在 `status.notes` 中说明。
+- **First screenshot is slow.** The first `status`/`observe` performs auth, ticket
+  exchange and a headless browser launch, and waits for the first framebuffer
+  update; those commands use a 120s timeout. Do not issue concurrent retries.
+- **ASCII only.** Chinese (and other non-ASCII) text cannot be injected directly;
+  type pinyin in a guest input method and select candidates, verifying each step
+  with a screenshot.
+- **One console at a time.** Do not use the PVE web console while an agent is
+  driving the VM, or input will be interleaved.
+- **Pinned to `@novnc/novnc` 1.7.0.** The adapter uses internal methods
+  (`_handleMouseButton`, `_sendMouse`, `_framebufferUpdate`, `_display.flush`);
+  re-run `npm test` before upgrading — the offline RFB end-to-end test fails
+  immediately on protocol or internal-API changes.
+- **Resolution changes invalidate pixel coordinates.** The daemon resizes the
+  browser viewport when the guest changes resolution; prefer normalised coordinates
+  and take a fresh screenshot.
+- **Idle release.** After `idleTimeoutMs` without activity, the daemon releases all
+  keys and closes the session (ticket + browser) so it does not hold the console
+  indefinitely. The next command transparently reconnects, so the first command
+  after a long pause is slower — this is expected.
+- **Chromium sandbox.** If the kernel lacks user namespaces, the daemon falls back
+  to `--no-sandbox` and records it in `status.notes`.
 
 ---
 
-## 当前状态
+## Security
 
-**已对真实 PVE 验证**（`192.0.2.10:8006`，仅 TLS + 无认证端点，未发送凭据、未触碰任何 VM）：
+- PVE credentials, console tickets and TLS verification are confined to the daemon
+  process. The adapter page in the browser only receives a loopback URL and the
+  short-lived RFB password.
+- The daemon socket is created with `0600`; runtime directories and frames use `0700`/`0600`.
+- TLS pinning verifies the leaf digest and SAN before any request byte is written;
+  on mismatch the socket is destroyed rather than downgraded.
+- Passwords and tokens should only ever be passed via environment variables or
+  `type --from-file` / `--stdin`, never as CLI arguments.
 
-- `fingerprint`：拿到 leaf 摘要 `<sha256-fingerprint>`，CN `pve-node.lan`，
-  签发者 `Proxmox Virtual Environment`，SAN 包含 `IP Address:192.0.2.10`，有效期至 2028-06
-- 握手**只下发 leaf**（链长 1），因此无法从握手引导出 CA
-- `tlscheck`：指纹固定生效，`/access/domains` 返回 `pam`/`pve`，往返 41ms
+See [SECURITY.md](SECURITY.md) for the vulnerability reporting process.
 
-**已离线验证**（`npm test`，30 个用例全绿）：
+## License
 
-- **mock PVE 全链路**（真 `bin/pve-cu.js` → 真 Daemon → 真 PveApi/Bridge/Chromium → 假 PVE REST+WebSocket）：
-  API Token 与用户密码两种认证、`vncproxy(websocket=1)` 参数、CSRF 头、
-  **WebSocket 升级必须带 API 认证**、截图落盘为 PNG、click/right/scroll/drag/key/type/reset、
-  401 与坐标越界拒绝、`daemon stop` 清理 socket、VM 停止时不开控制台、`doctor` 三种模式
-- 配置校验、坐标换算（归一化/像素/自定义 space）、按键与组合键 keysym+DOM code 规划、CLI 参数解析
-- loopback bridge：页面托管、token 校验、`binary` 子协议、Cookie/Authorization 头透传、双向字节转发
-- Daemon：动作串行派发、截图落盘（0600）与按数量裁剪、非法输入在触达控制台前被拒绝
-- TLS 固定：正确指纹放行、**连续多次请求仍放行**（TLS 会话复用会隐藏证书，已禁用 session 缓存）、
-  错误指纹拒绝且**请求不会发出**、地址（SAN）不符拒绝、`caFile` 完整链校验、
-  bridge 的 `wss://` 上游同样受固定保护
-- `observe --wait-change`：服务端推送新帧时立即返回 `changed: true`，画面静止时按超时返回 `changed: false`
-- **像素通道顺序**：fake server 画四象限（红/绿/蓝/白），从 noVNC 解码后的 canvas 读回像素断言颜色不变；
-  `npm run mock-console` 还会产出一张真 PNG 供人工看图核对（noVNC 的 Raw 解码器对 32bpp 直接按字节拷贝，
-  因此线序必须是 R,G,B,X，即 QEMU 小端格式的 red-shift=0）
-- **RFB 端到端**（自建 fake VNC server 承载于 WebSocket，模拟 PVE 的 vncwebsocket）：
-  3.008 握手、VNC 认证（type 2，确认密码真的参与了 challenge 响应）、ServerInit/分辨率、
-  Raw framebuffer → PNG 截图、PointerEvent 绝对坐标与左右键/滚轮位、
-  QEMU Extended Key Event（scancode 0x1d/0x26/0xc8 等）与普通 KeyEvent 回退路径、认证失败可见
+[MIT](LICENSE) © 2026 drgnchan
 
-**已完成真实联调**（`192.0.2.10:8006` / VMID 105 / Windows 11，2026-09-06）：
-
-- `tlscheck` / `doctor --console` 全绿；首帧 1280x800 完整（`fullFrame: true`）
-- 鼠标绝对定位、点击命中真实 UI、`--wait-change` 81ms 捕获变化
-- 键盘含 SAS：`ctrl,alt,delete` 唤出凭据界面（安全登录机器必须）
-- `type --from-file` + `Enter` 完成真实登录，进入桌面
-- 实测陷阱已写入 SKILL.md：光标重绘滞后（I）、安全登录需 SAS（J）
-
-复现联调：
-
-```bash
-pve-cu --target windows-vm doctor --console   # 一条命令跑完全部检查
-```
-
-调试日志：`~/.cache/pve-cu/<target>/daemon.log`；`PVE_CU_DEBUG=1` 输出完整堆栈。
+[中文文档](README.zh-CN.md)
