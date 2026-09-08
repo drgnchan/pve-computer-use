@@ -15,7 +15,7 @@ test('US QWERTY symbols keep their keysym and pick the shifted code', () => {
   assert.deepEqual(charPlan(' '), { keysym: 0x20, code: 'Space', shift: false });
 });
 
-test('combos accept onekvm-cu style key names', () => {
+test('combos accept CLI-style key names', () => {
   assert.deepEqual(comboPlan('ctrl,l').map(key => key.code), ['ControlLeft', 'KeyL']);
   assert.deepEqual(comboPlan('ctrl,shift,esc').map(key => key.keysym), [0xffe3, 0xffe1, 0xff1b]);
   assert.deepEqual(comboPlan('alt+f4').map(key => key.code), ['AltLeft', 'F4']);

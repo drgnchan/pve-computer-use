@@ -1,6 +1,6 @@
 # PVE Computer Use (`pve-cu`)
 
-用「截图 + 鼠标键盘」的方式控制 Proxmox VE 上的虚拟机控制台，命令风格与 `onekvm-cu` 一致，可直接作为 Pi Skill 使用。
+用「截图 + 鼠标键盘」的方式控制 Proxmox VE 上的虚拟机控制台，可直接作为 Pi Skill 使用。
 
 不需要在虚拟机内安装任何 Agent：控制的是 PVE 提供的虚拟显示器与虚拟输入设备，因此 BIOS、系统安装界面、登录界面都能操作。
 
@@ -236,43 +236,6 @@ pve-cu --target windows-vm click --x 0.5 --y 0.5 --observe --wait-stable
 
 升级：先 `npm run build`，再在无输入进行时 `pve-cu --target windows-vm daemon stop`，
 下次调用启动新 daemon（不会退出 VPN）；Pi `/reload` 加载扩展与技能，MCP 服务也需重启/重载。
-
-## 与 `onekvm-cu` 的关系
-
-| | onekvm-cu | pve-cu |
-|---|---|---|
-| 视频来源 | One-KVM HDMI 采集 (MJPEG) | PVE VNC/RFB framebuffer |
-| 输入通道 | USB HID Gadget | QEMU 虚拟键鼠（RFB 事件） |
-| 目标数量 | 单台物理机 | 每台 VM 一个 target/Daemon |
-| 中文输入 | 需目标机输入法 + 拼音 | 同样限制（RFB 只发按键） |
-| CLI 语义 | `observe/click/type/key/reset` | 完全一致 |
-
-两者的 Skill 操作闭环相同：**观察 → read 看图 → 单一动作 → 再观察验证**。
-
----
-
-## 与 SecureLink TOTP MCP 的衔接
-
-`~/tools/securelink-auth-mcp` 的 `securelink_enter_totp` 可以把验证码直接送进
-某台固定的 PVE 虚拟机控制台（种子仍只在本地 Keyring，验证码不出现在工具参数与返回值里）：
-
-```bash
-# MCP server 的环境（Pi MCP Adapter 配置里设置）
-SECURELINK_TOTP_BACKEND=pve
-SECURELINK_TOTP_PVE_TARGET=windows-vm
-```
-
-安全约束：
-
-- 工具**无参数**，目标机器由环境固定，模型无法临时改投别的 VM。
-- 发送前先向该 target 的 Daemon 要 `status`，必须同时满足
-  `target`/`node`/`vmid` 与配置一致且 `connected: true`，否则拒绝输入。
-- Daemon socket 不存在时 MCP 会通过固定 target 的 pve-cu CLI 自动拉起；输入前仍检查身份及连接。
-- 返回值里带 `channel`（backend/target/node/vmid），便于核对验证码去了哪台机器。
-- 不设 `SECURELINK_TOTP_BACKEND` 时行为完全不变，仍走 One-KVM 硬件。
-
-调用前仍必须由 Agent 看图确认 MFA 输入框已聚焦；返回 `entered: true` 只代表输入完成，
-是否登录成功要再截图判断。
 
 ---
 
